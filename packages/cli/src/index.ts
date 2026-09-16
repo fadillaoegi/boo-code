@@ -62,7 +62,7 @@ async function main() {
   })
 
   console.log(`\n${banner()}\n`)
-  console.log(`  ${theme.accent('Boo-code')} ${theme.muted(`· ${model} · ${workspace}`)}`)
+  console.log(`  ${theme.accent('Boo Code')} ${theme.muted(`· ${model} · ${workspace}`)}`)
   console.log(`  ${theme.muted('ketik perintah, atau /keluar untuk berhenti')}\n`)
 
   for (;;) {

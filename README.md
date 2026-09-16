@@ -1,7 +1,7 @@
-# Boo
+# Boo Code
 
 Coding agent buatan FLdev. Satu otak (`@boo/core`), dua antarmuka: CLI `boo` hari ini,
-web menyusul. Model diakses lewat [9Router](http://localhost:20128) sebagai satu pintu.
+web menyusul. Nama produknya Boo Code; CLI dan web hanyalah dua cara menjalankannya. Model diakses lewat [9Router](http://localhost:20128) sebagai satu pintu.
 
 ## Menjalankan
 
