@@ -42,6 +42,17 @@ function formatDuration(ms: number): string {
  */
 export class StatusLine {
   private readonly interactive = Boolean(stdout.isTTY)
+  /**
+   * Tujuan keluaran permanen (ringkasan fase dan catatan). Disuntikkan agar
+   * pemanggil dapat menahannya selama pengguna mengetik; penggambaran spinner
+   * sendiri tetap langsung karena sudah dihentikan selama mengetik.
+   */
+  private readonly write: (text: string) => void
+
+  constructor(write: (text: string) => void = (text) => { stdout.write(text) }) {
+    this.write = write
+  }
+
   private timer: NodeJS.Timeout | null = null
   private frame = 0
   /** Fase kerja yang akan dibekukan; orchestrating tidak pernah mengisinya. */
@@ -85,7 +96,6 @@ export class StatusLine {
 
   /** Membekukan fase kerja berjalan menjadi baris ringkasan permanen. */
   commit(): void {
-    this.typing = false
     if (!this.phase) {
       this.clear()
       return
@@ -97,7 +107,7 @@ export class StatusLine {
     this.phase = null
     this.showing = null
     this.detail = ''
-    stdout.write(`  ${theme.accent('●')} ${theme.bold(label)}${detail}  ${theme.muted(duration)}\n`)
+    this.write(`  ${theme.accent('●')} ${theme.bold(label)}${detail}  ${theme.muted(duration)}\n`)
   }
 
   /**
@@ -107,9 +117,9 @@ export class StatusLine {
    * menimpa huruf yang sedang diketik. Baris dikosongkan agar readline memiliki
    * barisnya sendiri, dan penggambaran berhenti sampai ketikan dikirim.
    *
-   * Mengembalikan true hanya pada penekanan pertama, supaya pemanggil dapat
-   * meminta readline menggambar ulang barisnya sekali saja — huruf pertama
-   * terlanjur tergema di baris spinner sebelum baris itu dibersihkan.
+   * Hanya pemanggil yang mengakhiri keadaan mengetik, lewat resume(). Ringkasan
+   * fase yang dibekukan selama pengguna mengetik tidak boleh menghidupkan
+   * spinner kembali di atas baris ketiknya.
    */
   pause(): boolean {
     if (this.typing) return false
@@ -118,20 +128,25 @@ export class StatusLine {
     return true
   }
 
+  /** Pengguna selesai mengetik; animasi fase yang masih berjalan dilanjutkan. */
+  resume(): void {
+    if (!this.typing) return
+    this.typing = false
+    this.animate()
+  }
+
   /**
    * Mencetak catatan sekali jalan tanpa mengganggu fase yang sedang berjalan.
    * Baris hidup dihapus, catatan dicetak, lalu baris hidup digambar ulang.
    */
   note(text: string): void {
-    this.typing = false
     this.stop()
-    stdout.write(`${text}\n`)
+    this.write(`${text}\n`)
     this.animate()
   }
 
   /** Membuang baris hidup tanpa membekukan apa pun. */
   clear(): void {
-    this.typing = false
     this.stop()
     this.showing = null
   }

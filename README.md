@@ -67,6 +67,8 @@ aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
 
 | Bendera | Fungsi |
 |---|---|
+| `--resume [id]` | lanjutkan sesi; tanpa id, pilih dari daftar |
+| `--continue` | lanjutkan sesi terakhir di direktori ini |
 | `--model <id>` | pilih model untuk sesi ini |
 | `--effort <tingkat>` | low, medium, high, atau xhigh untuk GPT-5.6 |
 | `--verbose` | tampilkan keluaran tool selengkapnya |
@@ -219,6 +221,71 @@ packages/
 Dependency mengarah satu arah: CLI bergantung pada core, core tidak bergantung pada
 siapa pun. Web nanti menjadi konsumen kedua dari core yang sama, bukan salinannya.
 
+## Sesi
+
+Setiap percakapan disimpan, sehingga dapat dilanjutkan setelah `boo` ditutup —
+seperti `claude --resume`. Saat keluar, perintahnya ditampilkan:
+
+```
+  Lanjutkan sesi ini: boo --resume 5bd73640
+```
+
+| Perintah | Fungsi |
+|---|---|
+| `boo --resume 5bd73640` | lanjutkan sesi tertentu; id lengkap atau awalannya |
+| `boo --resume` | pilih dari daftar sesi di direktori ini, terbaru lebih dulu |
+| `boo --continue` | langsung lanjutkan sesi yang terakhir diperbarui |
+
+Sesi yang dilanjutkan memulihkan riwayat percakapan, model dan tingkat penalaran
+terakhirnya, serta riwayat ketikan untuk panah atas. Beberapa tukar-jawab terakhir
+ditampilkan di bawah banner sebagai pengingat. Bendera `--model` dan `--effort`
+tetap dapat dipakai untuk mengganti model sesi itu.
+
+### Penyimpanan
+
+Setiap sesi adalah satu berkas JSONL di `~/.boo/sessions`. Rekaman ditambahkan
+baris demi baris secara sinkron begitu pesan masuk ke riwayat, sehingga proses yang
+berhenti mendadak — Ctrl-C, terminal ditutup, crash — paling banyak kehilangan
+baris yang sedang ditulis. Membuka `boo` lalu langsung keluar tidak meninggalkan
+berkas.
+
+Sesi dapat memuat potongan kode dan apa pun yang diketik, jadi direktorinya hanya
+dapat dibuka pemiliknya (`700`) dan berkasnya hanya dapat dibaca pemiliknya (`600`).
+Isi berkas rahasia tidak pernah ada di dalamnya, karena `read_file` menolaknya
+sebelum dibaca.
+
+### Sesi terikat ke direktorinya
+
+Sesi hanya dapat dilanjutkan dari direktori tempat ia dibuat. Riwayatnya merujuk
+berkas di direktori itu, dan workspace adalah batas yang tidak boleh dilewati tool —
+melanjutkannya dari tempat lain akan membuat agent bertindak atas berkas yang
+keliru. `boo` menolak dan menunjukkan perintah yang benar.
+
+### Sesi yang terputus
+
+Proses yang berhenti di tengah pekerjaan dapat meninggalkan riwayat yang tidak sah:
+pemanggilan tool tanpa hasil, atau pertanyaan tanpa jawaban. Model menolak riwayat
+seperti itu, sehingga sesinya tidak akan dapat dilanjutkan sama sekali. Saat dimuat,
+riwayat diperbaiki lebih dulu:
+
+- Tool yang terputus diberi hasil *tidak dijalankan*.
+- Pertanyaan yang tak sempat dijawab diberi jawaban pengganti, di mana pun letaknya
+  dalam riwayat — termasuk sesi yang pernah dilanjutkan lalu terputus lagi.
+- Hasil tool yatim dan baris berkas yang terpotong dibuang.
+
+Perbaikan dilaporkan saat sesi dibuka:
+
+```
+  sesi sebelumnya berhenti mendadak: 1 baris rusak dilewati, 1 tool yang
+  terputus ditandai tidak dijalankan, 1 permintaan terputus ditandai belum dijawab
+```
+
+### Ctrl-C
+
+Ctrl-C pertama menutup sesi dengan tertib; bila Boo masih bekerja, pekerjaan itu
+diselesaikan dulu. Ctrl-C kedua keluar seketika. Keduanya aman, karena setiap pesan
+sudah tersimpan begitu masuk ke riwayat.
+
 ## Tampilan proses
 
 Menampilkan setiap isi berkas dan daftar direktori membuat terminal penuh ratusan
@@ -248,6 +315,12 @@ satu baris.
 
 Kegagalan tool tidak pernah disembunyikan di balik ringkasan. Untuk melihat
 keluaran tool selengkapnya, jalankan dengan `--verbose`.
+
+Semua keluaran selama Boo bekerja melewati satu pintu yang memperhatikan posisi
+kursor dan baris ketik. Spinner selalu mendapat baris sendiri sehingga tidak
+menghapus kalimat pengantar model, dan keluaran yang tiba selagi kamu mengetik
+permintaan berikutnya ditahan lalu dilepas setelah ketikan dikirim — tidak menyusup
+ke baris ketik maupun menghapus jawaban yang sedang mengalir.
 
 ## Batas konteks
 

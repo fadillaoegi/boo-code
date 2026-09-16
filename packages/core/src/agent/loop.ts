@@ -10,6 +10,7 @@ import type { DiffLine } from '../tools/diff.ts'
 import type { ToolRegistry } from '../domain/tool.ts'
 import type { NineRouterProvider } from '../provider/nineRouter.ts'
 import { DEFAULT_MAX_CONTEXT_TOKENS, trimToBudget } from './context.ts'
+import { repairHistory, type RepairResult } from './history.ts'
 import { BOO_SYSTEM_PROMPT } from './prompt.ts'
 
 export type AgentEvent =
@@ -40,6 +41,16 @@ export interface AgentOptions {
   maxTurns?: number
   /** Anggaran token untuk pesan yang dikirim; riwayat lama dipangkas di atasnya. */
   maxContextTokens?: number
+  /**
+   * Riwayat sesi sebelumnya untuk dilanjutkan. Diperbaiki lebih dulu, karena
+   * sesi yang terputus dapat memuat panggilan tool tanpa hasil.
+   */
+  history?: Message[]
+  /**
+   * Dipanggil setiap kali pesan baru masuk ke riwayat, dalam urutan yang sama.
+   * Riwayat yang dipulihkan dari `history` tidak ikut dilaporkan.
+   */
+  onMessage?: (message: Message) => void
   systemPrompt?: string
 }
 
@@ -51,12 +62,17 @@ export class Agent {
   private readonly messages: Message[] = []
   private readonly options: AgentOptions
 
+  /** Hasil perbaikan riwayat yang dipulihkan, atau null untuk sesi baru. */
+  readonly restored: RepairResult | null
+
   constructor(options: AgentOptions) {
     this.options = options
     this.messages.push({
       role: 'system',
       content: options.systemPrompt ?? BOO_SYSTEM_PROMPT,
     })
+    this.restored = options.history?.length ? repairHistory(options.history) : null
+    if (this.restored) this.messages.push(...this.restored.messages)
   }
 
   get history(): readonly Message[] {
@@ -65,7 +81,7 @@ export class Agent {
 
   /** Menjalankan satu permintaan pengguna sampai tuntas. */
   async *send(userInput: string): AsyncGenerator<AgentEvent> {
-    this.messages.push({ role: 'user', content: userInput })
+    this.append({ role: 'user', content: userInput })
     const { provider, registry, maxTurns = DEFAULT_MAX_TURNS } = this.options
 
     for (let turn = 0; turn < maxTurns; turn += 1) {
@@ -78,7 +94,7 @@ export class Agent {
       }
 
       const { message } = result
-      this.messages.push(message)
+      this.append(message)
       yield { type: 'turn-end', message }
 
       const toolCalls = message.tool_calls ?? []
@@ -165,6 +181,12 @@ export class Agent {
   }
 
   private pushToolResult(callId: string, content: string): void {
-    this.messages.push({ role: 'tool', tool_call_id: callId, content })
+    this.append({ role: 'tool', tool_call_id: callId, content })
+  }
+
+  /** Satu-satunya jalan pesan baru masuk ke riwayat, agar selalu terlaporkan. */
+  private append(message: Message): void {
+    this.messages.push(message)
+    this.options.onMessage?.(message)
   }
 }

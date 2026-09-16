@@ -19,10 +19,20 @@ import {
   groupModels,
   NineRouterProvider,
   type DiffLine,
+  type Message,
   type ModelFamily,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
 import { select } from './select.ts'
+import {
+  listSessions,
+  loadSession,
+  relativeTime,
+  SessionError,
+  SessionRecorder,
+  shortId,
+  type LoadedSession,
+} from './sessions.ts'
 import { PhaseTally, phaseOf, StatusLine } from './status.ts'
 import { banner, theme } from './theme.ts'
 
@@ -62,6 +72,8 @@ function version(): string {
 const USAGE = `boo — coding agent oleh FLdev
 
   boo                      mulai sesi di direktori saat ini
+  boo --resume [id]        lanjutkan sesi; tanpa id, pilih dari daftar
+  boo --continue           lanjutkan sesi terakhir di direktori ini
   boo --model <id>         pilih model untuk sesi ini
   boo --effort <tingkat>   low, medium, high, atau xhigh (model Codex)
   boo --verbose            tampilkan keluaran tool selengkapnya
@@ -100,6 +112,109 @@ itu masuk antrean dan dijalankan setelah yang sekarang selesai.`
  */
 function modelLabel(model: string, effort: string | undefined): string {
   return describeSelection(groupModels([model]), model, effort)
+}
+
+type ResumeRequest =
+  | { mode: 'new' }
+  | { mode: 'continue' }
+  | { mode: 'pick' }
+  | { mode: 'id'; id: string }
+
+/** Membaca --resume [id] dan --continue. Nilai yang diawali "-" adalah bendera lain. */
+function resumeRequest(): ResumeRequest {
+  const args = process.argv.slice(2)
+  if (args.includes('--continue') || args.includes('-c')) return { mode: 'continue' }
+  const inline = args.find((arg) => arg.startsWith('--resume='))
+  if (inline) return { mode: 'id', id: inline.slice('--resume='.length) }
+  const index = args.findIndex((arg) => arg === '--resume' || arg === '-r')
+  if (index === -1) return { mode: 'new' }
+  const next = args[index + 1]
+  return next && !next.startsWith('-') ? { mode: 'id', id: next } : { mode: 'pick' }
+}
+
+function fail(message: string, hint?: string): never {
+  console.error(theme.danger(message))
+  if (hint) console.error(theme.muted(hint))
+  process.exit(1)
+}
+
+/**
+ * Menentukan sesi yang dilanjutkan, atau null untuk sesi baru.
+ *
+ * Sesi terikat ke direktori asalnya. Riwayatnya merujuk berkas di direktori itu,
+ * dan workspace adalah batas yang tidak boleh dilewati tool — melanjutkannya dari
+ * direktori lain akan membuat agent bertindak atas berkas yang keliru.
+ */
+async function resolveResume(request: ResumeRequest, workspace: string): Promise<LoadedSession | null> {
+  if (request.mode === 'new') return null
+
+  let session: LoadedSession
+  try {
+    if (request.mode === 'id') {
+      session = loadSession(request.id)
+    } else {
+      const summaries = listSessions(workspace)
+      if (!summaries.length) {
+        fail('Belum ada sesi tersimpan untuk direktori ini.', 'Mulai sesi baru dengan `boo`.')
+      }
+      if (request.mode === 'continue') {
+        session = loadSession(summaries[0].id)
+      } else {
+        const labels = summaries.map((item) => `${shortId(item.id)}  ${relativeTime(item.updatedAt).padEnd(14)}  ${item.title}`)
+        // Pemilih butuh readline; yang ini sementara dan ditutup sebelum sesi dimulai,
+        // karena readline utama harus dibuat dengan riwayat ketikan sesi terpilih.
+        const temporary = createInterface({ input: stdin, output: stdout })
+        const picked = await select(temporary, {
+          title: 'Lanjutkan sesi',
+          items: labels,
+          initialIndex: 0,
+          hint: 'panah atas/bawah memilih, enter melanjutkan, esc membatalkan',
+        })
+        temporary.close()
+        if (picked === undefined) {
+          console.log(`  ${theme.bold('Sesi di direktori ini')}`)
+          labels.forEach((label) => console.log(`  ${label}`))
+          fail('Terminal ini tidak mendukung pemilih.', 'Jalankan `boo --resume <id>` dengan id dari daftar di atas.')
+        }
+        if (picked === null) {
+          console.log(`  ${theme.muted('dibatalkan')}`)
+          process.exit(0)
+        }
+        session = loadSession(summaries[picked].id)
+      }
+    }
+  } catch (error) {
+    if (error instanceof SessionError) fail(error.message, 'Jalankan `boo --resume` untuk memilih dari daftar sesi.')
+    throw error
+  }
+
+  if (session.workspace !== workspace) {
+    fail(
+      `Sesi ${shortId(session.id)} berasal dari ${session.workspace}.`,
+      `Lanjutkan dari direktori itu:  cd ${session.workspace} && boo --resume ${shortId(session.id)}`,
+    )
+  }
+  return session
+}
+
+/** Potongan beberapa tukar-jawab terakhir, supaya sesi yang dilanjutkan punya konteks. */
+function renderRecap(messages: Message[], exchanges = 3): string {
+  const pairs: Array<{ question: string; answer: string }> = []
+  for (const message of messages) {
+    if (message.role === 'user' && message.content) pairs.push({ question: message.content, answer: '' })
+    else if (message.role === 'assistant' && message.content && pairs.length) pairs[pairs.length - 1].answer = message.content
+  }
+  const clip = (text: string, lines: number, width: number) => {
+    const all = text.trim().split('\n').filter((line) => line.trim())
+    const shown = all.slice(0, lines).map((line) => (line.length > width ? `${line.slice(0, width)}…` : line))
+    if (all.length > lines) shown[shown.length - 1] += ' …'
+    return shown
+  }
+  return pairs.slice(-exchanges).map(({ question, answer }) => {
+    const asked = clip(question, 1, 90).map((line) => `  ${theme.accent('›')} ${line}`)
+    const replied = answer ? clip(answer, 2, 90).map((line) => `    ${theme.muted(line)}`) : []
+    return [...asked, ...replied].join('\n')
+  }).join('\n')
 }
 
 /** Membaca nilai bendera seperti --model atau --effort dari argumen baris perintah. */
@@ -181,9 +296,14 @@ async function main() {
 
   const workspace = process.cwd()
   const config = loadConfig(workspace)
-  // Urutan prioritas: flag baris perintah, lalu konfigurasi, lalu bawaan.
-  const model = flagValue('model', 'm') || config.BOO_MODEL || DEFAULT_MODEL
-  const requestedEffort = flagValue('effort') || config.BOO_EFFORT
+  const resumed = await resolveResume(resumeRequest(), workspace)
+
+  // Urutan prioritas: bendera baris perintah, lalu model terakhir sesi yang
+  // dilanjutkan, lalu konfigurasi, lalu bawaan.
+  const flagModel = flagValue('model', 'm')
+  const fromSession = !flagModel && Boolean(resumed?.model)
+  const model = flagModel || resumed?.model || config.BOO_MODEL || DEFAULT_MODEL
+  const requestedEffort = flagValue('effort') || (fromSession ? resumed?.reasoningEffort : config.BOO_EFFORT)
   const reasoningEffort = validEffort(model, requestedEffort)
   if (requestedEffort && !reasoningEffort) {
     console.error(theme.muted(`Tingkat "${requestedEffort}" tidak berlaku untuk ${model}; diabaikan.`))
@@ -196,8 +316,95 @@ async function main() {
     reasoningEffort,
   })
 
-  const readline = createInterface({ input: stdin, output: stdout })
-  const status = new StatusLine()
+  // Pertanyaan sesi sebelumnya dipulihkan ke riwayat panah atas, terbaru lebih dulu.
+  const previousPrompts = (resumed?.messages ?? [])
+    .filter((message) => message.role === 'user' && message.content)
+    .map((message) => message.content as string)
+    .reverse()
+  const readline = createInterface({ input: stdin, output: stdout, history: previousPrompts, historySize: 200 })
+
+  /**
+   * Satu pintu untuk keluaran selama Boo bekerja.
+   *
+   * Keluaran dan baris ketik berbagi satu kursor. Menulis tanpa memperhatikannya
+   * pernah menghapus teks: spinner digambar di baris kalimat pengantar model dan
+   * menghapusnya, dan baris ketik yang digambar ulang di tengah jawaban ikut
+   * membersihkan baris jawaban itu.
+   *
+   * - `midLine` mencatat apakah aliran keluaran berhenti di tengah baris, supaya
+   *   spinner dan baris ketik selalu mendapat baris sendiri.
+   * - Selama pengguna mengetik permintaan berikutnya, keluaran ditahan lalu
+   *   dilepas setelah ketikan dikirim atau dihapus, agar tidak menyusup ke
+   *   tengah baris ketik.
+   */
+  let midLine = false
+  let typing = false
+  /** Aliran keluaran berhenti di tengah baris ketika pengguna mulai mengetik. */
+  let resumeIndent = false
+  const held: string[] = []
+
+  function emit(text: string): void {
+    if (!text) return
+    if (typing) {
+      held.push(text)
+      midLine = !text.endsWith('\n')
+      return
+    }
+    // Lanjutan baris yang terputus oleh baris ketik berada di baris baru dan perlu
+    // indentasinya kembali. Hanya lanjutan itu yang diberi indentasi: baris yang
+    // sudah utuh, seperti catatan antrean, dilewati dan tanda tetap menunggu.
+    if (resumeIndent) {
+      if (text.startsWith('\n')) resumeIndent = false
+      else if (!text.startsWith(' ')) {
+        resumeIndent = false
+        text = `  ${text}`
+      }
+    }
+    stdout.write(text)
+    midLine = !text.endsWith('\n')
+  }
+
+  /** Mengakhiri keadaan mengetik dan melepas keluaran yang sempat ditahan. */
+  function stopTyping(clearInputLine: boolean): void {
+    if (!typing) return
+    typing = false
+    if (clearInputLine) stdout.write('\r\u001b[2K')
+    const output = held.join('')
+    held.length = 0
+    // Lewat emit agar lanjutan baris yang terputus mendapat indentasinya.
+    emit(output)
+    status.resume()
+  }
+
+  const status = new StatusLine(emit)
+
+  const recorder = new SessionRecorder({ workspace, model, reasoningEffort, resumeId: resumed?.id })
+  // Bendera --model atau --effort saat melanjutkan mengganti model sesi itu.
+  if (resumed && (model !== resumed.model || reasoningEffort !== resumed.reasoningEffort)) {
+    recorder.recordModel(model, reasoningEffort)
+  }
+
+  function printResumeHint(): void {
+    if (!recorder.started) return
+    console.log(`\n  ${theme.muted('Lanjutkan sesi ini:')} boo --resume ${shortId(recorder.id)}`)
+  }
+
+  // Ctrl-C pertama menutup sesi dengan tertib; bila Boo masih bekerja, pekerjaan
+  // itu diselesaikan dulu. Ctrl-C kedua keluar seketika — aman, karena setiap pesan
+  // sudah ditulis ke berkas sesi begitu masuk ke riwayat.
+  let interrupted = false
+  readline.on('SIGINT', () => {
+    if (interrupted) {
+      status.clear()
+      printResumeHint()
+      process.exit(130)
+    }
+    interrupted = true
+    if (busy) {
+      status.note(`  ${theme.muted('menyelesaikan pekerjaan yang sedang berjalan; Ctrl-C lagi untuk keluar sekarang')}`)
+    }
+    readline.close()
+  })
 
   /**
    * Antrean baris sendiri, bukan readline.question().
@@ -262,12 +469,14 @@ async function main() {
       return
     }
     if (busy) {
+      // readline sudah pindah baris setelah Enter; lepaskan keluaran yang ditahan.
+      stopTyping(false)
       const text = line.trim()
       if (!text) return
       if (isQueueCommand(text)) {
         status.pause()
         queueCommand(text.slice('/queue'.length).trim())
-        status.note('')
+        status.resume()
         return
       }
       pending.push(text)
@@ -284,11 +493,23 @@ async function main() {
   // Spinner dan ketikan berbagi satu baris. Begitu pengguna menekan tombol saat
   // Boo bekerja, animasi dihentikan agar readline memiliki barisnya sendiri.
   if (stdin.isTTY) {
+    // Dipasang di depan pendengar readline, sehingga baris ketik sudah punya
+    // tempat sendiri sebelum readline menggemakan huruf pertama.
+    stdin.prependListener('keypress', (_: string, key: { name?: string; ctrl?: boolean } = {}) => {
+      if (!busy || typing) return
+      if (key.ctrl || key.name === 'return' || key.name === 'enter') return
+      typing = true
+      status.pause()
+      if (midLine) {
+        stdout.write('\n')
+        resumeIndent = true
+      }
+      readline.prompt(true)
+    })
+    // Dipasang di belakang readline, agar isi baris sudah diperbarui: ketikan yang
+    // dihapus seluruhnya melepas keluaran yang ditahan.
     stdin.on('keypress', () => {
-      if (!busy) return
-      // Menggambar ulang sekali memulihkan huruf pertama, yang tergema ke baris
-      // spinner sebelum baris itu sempat dibersihkan.
-      if (status.pause()) readline.prompt(true)
+      if (busy && typing && readline.line.length === 0) stopTyping(true)
     })
   }
 
@@ -310,12 +531,16 @@ async function main() {
     provider,
     registry: createDefaultRegistry(),
     workspace,
+    history: resumed?.messages,
+    onMessage: (message) => recorder.recordMessage(message),
     ...(config.BOO_MAX_CONTEXT_TOKENS
       ? { maxContextTokens: Number(config.BOO_MAX_CONTEXT_TOKENS) }
       : {}),
     async askPermission({ preview, name, detail }) {
       // Baris status hidup harus dibuang dulu; spinner akan menimpa prompt izin.
+      stopTyping(true)
       status.clear()
+      if (midLine) emit('\n')
       if (detail?.length) console.log(`\n${renderDiff(detail)}`)
       // Pertanyaan izin sengaja memuat perintah utuh: pengguna menyetujui
       // tindakan yang terlihat, bukan nama tool yang abstrak.
@@ -363,6 +588,7 @@ async function main() {
     // Selalu ditimpa, termasuk menjadi undefined: tingkat milik model sebelumnya
     // tidak boleh terbawa ke model yang tidak menerimanya.
     provider.reasoningEffort = effort
+    recorder.recordModel(modelId, effort)
     console.log(`  ${theme.accent('model')} ${theme.bold(describeSelection(families, modelId, effort))}\n`)
   }
 
@@ -450,6 +676,24 @@ async function main() {
 
   console.log(`\n${banner()}\n`)
   console.log(`  ${theme.accent('Boo Code')} ${theme.muted(`· ${modelLabel(model, reasoningEffort)} · ${workspace}`)}`)
+  if (resumed) {
+    const count = resumed.messages.length
+    console.log(`  ${theme.muted(`melanjutkan sesi ${shortId(resumed.id)} · ${count} pesan · ${relativeTime(resumed.updatedAt)}`)}`)
+    const recap = renderRecap(resumed.messages)
+    if (recap) console.log(`\n${recap}`)
+
+    // Laporkan perbaikan riwayat agar jawaban pengganti tidak mengejutkan.
+    const notes: string[] = []
+    if (resumed.skippedLines) notes.push(`${resumed.skippedLines} baris rusak dilewati`)
+    if (agent.restored?.filledToolResults) {
+      notes.push(`${agent.restored.filledToolResults} tool yang terputus ditandai tidak dijalankan`)
+    }
+    if (agent.restored?.filledReplies) {
+      notes.push(`${agent.restored.filledReplies} permintaan terputus ditandai belum dijawab`)
+    }
+    if (notes.length) console.log(`\n  ${theme.muted(`sesi sebelumnya berhenti mendadak: ${notes.join(', ')}`)}`)
+    console.log()
+  }
   console.log(`  ${theme.muted('ketik perintah, /help untuk daftar perintah')}\n`)
 
   for (;;) {
@@ -506,15 +750,15 @@ async function main() {
           case 'text':
             if (!streamingText) {
               status.commit()
-              stdout.write('\n  ')
+              emit('\n  ')
               streamingText = true
             }
-            stdout.write(event.delta.replace(/\n/g, '\n  '))
+            emit(event.delta.replace(/\n/g, '\n  '))
             break
 
           case 'tool-start': {
             if (streamingText) {
-              stdout.write('\n')
+              emit('\n')
               streamingText = false
             }
             previews.set(event.callId, event.preview)
@@ -530,36 +774,45 @@ async function main() {
             // Kegagalan tidak boleh disembunyikan di balik ringkasan.
             if (event.isError) {
               status.commit()
-              console.log(`  ${theme.danger('gagal')} ${theme.bold(event.name)}\n${summarize(event.content, 4)}`)
+              emit(`  ${theme.danger('gagal')} ${theme.bold(event.name)}\n${summarize(event.content, 4)}\n`)
             } else if (VERBOSE) {
               status.commit()
-              console.log(summarize(event.content))
+              emit(`${summarize(event.content)}\n`)
             }
             break
           }
 
           case 'tool-denied':
             status.clear()
-            console.log(`  ${theme.muted(`${event.name} dilewati`)}`)
+            emit(`  ${theme.muted(`${event.name} dilewati`)}\n`)
             break
 
           case 'turn-end':
-            // Giliran berikutnya dimulai dengan model berpikir lagi.
-            if (event.message.tool_calls?.length) status.thinking()
+            // Giliran berikutnya dimulai dengan model berpikir lagi. Kalimat
+            // pengantar sebelum pemanggilan tool harus diakhiri dulu: spinner
+            // menggambar dengan membersihkan barisnya dan akan menghapus kalimat itu.
+            if (event.message.tool_calls?.length) {
+              if (streamingText) {
+                emit('\n')
+                streamingText = false
+              }
+              status.thinking()
+            }
             break
 
           case 'context-trimmed':
             status.clear()
-            console.log(`  ${theme.muted(`konteks dipangkas: ${event.droppedMessages} pesan lama dibuang (~${event.estimatedTokens} token terkirim)`)}`)
+            if (midLine) emit('\n')
+            emit(`  ${theme.muted(`konteks dipangkas: ${event.droppedMessages} pesan lama dibuang (~${event.estimatedTokens} token terkirim)`)}\n`)
             break
 
           case 'error':
             status.clear()
             if (streamingText) {
-              stdout.write('\n')
+              emit('\n')
               streamingText = false
             }
-            console.log(`\n  ${theme.danger('error')} ${event.message}`)
+            emit(`\n  ${theme.danger('error')} ${event.message}\n`)
             break
 
           default:
@@ -568,14 +821,19 @@ async function main() {
       }
       status.commit()
     } finally {
+      // Ketikan yang belum dikirim tetap tersimpan di readline dan akan tampil lagi
+      // bersama prompt berikutnya; keluaran yang ditahan dilepas lebih dulu.
+      stopTyping(true)
       // Sibuk harus selalu dilepas; bila tersangkut, seluruh ketikan
       // berikutnya akan masuk antrean dan sesi tampak membeku.
       busy = false
     }
-    stdout.write('\n\n')
+    stdout.write(midLine ? '\n\n' : '\n')
+    midLine = false
   }
 
   readline.close()
+  printResumeHint()
   console.log(`\n  ${theme.accent('Sampai jumpa.')}\n`)
 }
 
