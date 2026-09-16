@@ -38,6 +38,8 @@ const FEATURED_FAMILIES = [
   'ag/gemini-3.5-flash',
   'ag/gemini-3.7-flash',
   'ag/gemini-3.1-pro',
+  'ag/claude-sonnet-4-6',
+  'ag/claude-opus-4-6-thinking',
   'cx/gpt-5.6-luna',
   'cx/gpt-5.6-terra',
   'cx/gpt-5.6-sol',

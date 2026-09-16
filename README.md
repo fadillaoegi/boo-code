@@ -141,15 +141,16 @@ langkah — pilih keluarga, lalu pilih tingkat penalaran:
    Gemini 3.5 Flash                  Low
    Gemini 3.7 Flash                  Medium
    Gemini 3.1 Pro                    High
-   GPT-5.6 Luna                    > Extra High
+   Claude Sonnet 4.6               > Extra High
+   Claude Opus 4.6 Thinking
+   GPT-5.6 Luna
    GPT-5.6 Terra
  > GPT-5.6 Sol
    Model lain…
 ```
 
-Langkah kedua dilewati untuk keluarga yang hanya punya satu varian. Model lain —
-termasuk Claude Sonnet yang menjadi bawaan — tetap tersedia di bawah
-**Model lain…**.
+Langkah kedua dilewati untuk keluarga yang hanya punya satu varian, termasuk
+kedua model Claude. Model lainnya tetap tersedia di bawah **Model lain…**.
 
 Tingkat penalaran disampaikan lewat dua mekanisme yang berbeda:
 
