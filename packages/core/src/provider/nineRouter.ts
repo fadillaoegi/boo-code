@@ -18,6 +18,11 @@ export interface ProviderOptions {
   apiKey: string
   /** Dapat diubah saat sesi berjalan lewat perintah /model. */
   model: string
+  /**
+   * Dikirim sebagai `reasoning_effort` untuk model yang menerimanya, misalnya
+   * Codex. Model yang menanam tingkatnya di nama tidak memerlukan ini.
+   */
+  reasoningEffort?: string
   timeoutMs?: number
 }
 
@@ -89,6 +94,14 @@ export class NineRouterProvider {
     this.options.model = model
   }
 
+  get reasoningEffort(): string | undefined {
+    return this.options.reasoningEffort
+  }
+
+  set reasoningEffort(effort: string | undefined) {
+    this.options.reasoningEffort = effort
+  }
+
   /** Daftar model yang tersedia di instance 9Router. */
   async listModels(): Promise<string[]> {
     const { baseUrl, apiKey, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
@@ -112,7 +125,7 @@ export class NineRouterProvider {
     messages: Message[],
     tools: ToolSchema[],
   ): AsyncGenerator<StreamEvent, CompletionResult> {
-    const { baseUrl, apiKey, model, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
+    const { baseUrl, apiKey, model, reasoningEffort, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
     const endpoint = new URL('v1/chat/completions', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
 
     const response = await fetch(endpoint, {
@@ -126,6 +139,7 @@ export class NineRouterProvider {
         model,
         messages,
         stream: true,
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
         ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),

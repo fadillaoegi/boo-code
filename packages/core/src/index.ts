@@ -2,6 +2,8 @@ export type { Message, MessageRole, ToolCall, ToolSchema } from './domain/messag
 export type { Tool, ToolContext, ToolRegistry, ToolResult, ToolRisk } from './domain/tool.ts'
 export { createRegistry } from './domain/tool.ts'
 export { NineRouterProvider } from './provider/nineRouter.ts'
+export { describeSelection, effortLabel, findSelection, groupModels, humanizeModel } from './provider/models.ts'
+export type { EffortOption, EffortSource, ModelFamily } from './provider/models.ts'
 export type { CompletionResult, ProviderOptions, StreamEvent } from './provider/nineRouter.ts'
 export { createDefaultRegistry, defaultTools } from './tools/index.ts'
 export { resolveInWorkspace, WorkspaceError } from './tools/workspace.ts'

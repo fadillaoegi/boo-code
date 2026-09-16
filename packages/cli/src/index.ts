@@ -10,13 +10,41 @@
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
 import { readFileSync } from 'node:fs'
-import { Agent, createDefaultRegistry, diffStats, NineRouterProvider, type DiffLine } from '@boo/core'
+import {
+  Agent,
+  createDefaultRegistry,
+  describeSelection,
+  diffStats,
+  effortLabel,
+  findSelection,
+  groupModels,
+  NineRouterProvider,
+  type DiffLine,
+  type ModelFamily,
+} from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
 import { select } from './select.ts'
 import { PhaseTally, phaseOf, StatusLine } from './status.ts'
 import { banner, theme } from './theme.ts'
 
 const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
+
+/**
+ * Keluarga yang tampil di halaman pertama /model, sesuai urutan yang diminta.
+ * Hanya yang benar-benar tersedia di 9Router yang ditampilkan; sisanya tetap
+ * dapat dijangkau lewat "Model lain…" supaya tidak ada model yang hilang —
+ * termasuk model bawaan.
+ */
+const FEATURED_FAMILIES = [
+  'ag/gemini-3.5-flash',
+  'ag/gemini-3.7-flash',
+  'ag/gemini-3.1-pro',
+  'cx/gpt-5.6-luna',
+  'cx/gpt-5.6-terra',
+  'cx/gpt-5.6-sol',
+]
+
+const OTHER_MODELS_LABEL = 'Model lain…'
 const DEFAULT_BASE_URL = 'http://localhost:20128'
 
 const VERBOSE = process.argv.includes('--verbose')
@@ -34,6 +62,7 @@ const USAGE = `boo — coding agent oleh FLdev
 
   boo                      mulai sesi di direktori saat ini
   boo --model <id>         pilih model untuk sesi ini
+  boo --effort <tingkat>   low, medium, high, atau xhigh (model Codex)
   boo --verbose            tampilkan keluaran tool selengkapnya
   boo --version            tampilkan versi
   boo --help               tampilkan bantuan ini
@@ -49,10 +78,12 @@ Isi minimal:
 
   NINEROUTER_URL=http://localhost:20128
   NINEROUTER_KEY=sk-...
-  BOO_MODEL=ag/claude-sonnet-4-6`
+  BOO_MODEL=ag/claude-sonnet-4-6
+  BOO_EFFORT=medium`
 
 const HELP = `  /model          pilih model dengan tombol panah
-  /model <id>     ganti langsung, misal /model cx/gpt-5.5
+  /model <id> [tingkat]
+                  ganti langsung, misal /model cx/gpt-5.6-sol xhigh
   /queue          lihat permintaan yang mengantre
   /queue hapus    kosongkan antrean
   /help           tampilkan bantuan ini
@@ -61,13 +92,26 @@ const HELP = `  /model          pilih model dengan tombol panah
 Mengetik selagi Boo bekerja tidak memotong pekerjaannya; permintaan
 itu masuk antrean dan dijalankan setelah yang sekarang selesai.`
 
-/** Membaca --model dari argumen baris perintah. */
-function modelFromArgs(): string | undefined {
+/** Membaca nilai bendera seperti --model atau --effort dari argumen baris perintah. */
+function flagValue(name: string, short?: string): string | undefined {
   const args = process.argv.slice(2)
-  const index = args.findIndex((arg) => arg === '--model' || arg === '-m')
+  const index = args.findIndex((arg) => arg === `--${name}` || (short && arg === `-${short}`))
   if (index !== -1 && args[index + 1]) return args[index + 1]
-  const inline = args.find((arg) => arg.startsWith('--model='))
-  return inline?.slice('--model='.length)
+  return args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
+}
+
+/**
+ * Memastikan tingkat penalaran berlaku untuk model tersebut.
+ *
+ * Mengirim `reasoning_effort` ke model yang tidak menerimanya membuat upstream
+ * menolak, dan 9Router lalu mengunci model itu beberapa puluh detik untuk semua
+ * permintaan berikutnya. Karena itu tingkat yang tidak cocok dibuang di sini.
+ */
+function validEffort(model: string, effort: string | undefined): string | undefined {
+  if (!effort) return undefined
+  const [family] = groupModels([model])
+  if (family?.source !== 'parameter') return undefined
+  return family.options.some((option) => option.reasoningEffort === effort) ? effort : undefined
 }
 
 function requireKey(key: string | undefined): string {
@@ -128,12 +172,18 @@ async function main() {
   const workspace = process.cwd()
   const config = loadConfig(workspace)
   // Urutan prioritas: flag baris perintah, lalu konfigurasi, lalu bawaan.
-  const model = modelFromArgs() || config.BOO_MODEL || DEFAULT_MODEL
+  const model = flagValue('model', 'm') || config.BOO_MODEL || DEFAULT_MODEL
+  const requestedEffort = flagValue('effort') || config.BOO_EFFORT
+  const reasoningEffort = validEffort(model, requestedEffort)
+  if (requestedEffort && !reasoningEffort) {
+    console.error(theme.muted(`Tingkat "${requestedEffort}" tidak berlaku untuk ${model}; diabaikan.`))
+  }
 
   const provider = new NineRouterProvider({
     baseUrl: config.NINEROUTER_URL || DEFAULT_BASE_URL,
     apiKey: requireKey(config.NINEROUTER_KEY),
     model,
+    reasoningEffort,
   })
 
   const readline = createInterface({ input: stdin, output: stdout })
@@ -267,69 +317,131 @@ async function main() {
     },
   })
 
-  /** Mengganti model sesi berjalan; riwayat percakapan tetap dipertahankan. */
+  /**
+   * Memilih satu item dari daftar dan mengembalikan indeksnya, atau null bila
+   * dibatalkan. Tombol panah dipakai bila terminal mendukung; selain itu daftar
+   * bernomor diketik, supaya `boo` tetap berjalan saat input dipipe.
+   */
+  async function choose(
+    title: string,
+    labels: string[],
+    activeIndex: number,
+    initialIndex = activeIndex,
+  ): Promise<number | null> {
+    console.log()
+    const picked = await select(readline, {
+      title,
+      items: labels,
+      activeIndex,
+      initialIndex: Math.max(0, initialIndex),
+      activeLabel: '(aktif)',
+      hint: 'panah atas/bawah memilih, enter memakai, esc membatalkan',
+    })
+    if (picked !== undefined) return picked
+
+    console.log(`  ${theme.bold(title)}`)
+    labels.forEach((label, index) => {
+      const active = index === activeIndex ? theme.muted(' (aktif)') : ''
+      console.log(`  ${theme.muted(String(index + 1).padStart(3))}  ${label}${active}`)
+    })
+    const answer = (await ask(`\n  ${theme.muted('nomor [enter untuk batal] ')}`))?.trim()
+    const choice = Number(answer)
+    return answer && Number.isInteger(choice) && choice >= 1 && choice <= labels.length ? choice - 1 : null
+  }
+
+  function applyModel(families: ModelFamily[], modelId: string, effort: string | undefined): void {
+    provider.model = modelId
+    // Selalu ditimpa, termasuk menjadi undefined: tingkat milik model sebelumnya
+    // tidak boleh terbawa ke model yang tidak menerimanya.
+    provider.reasoningEffort = effort
+    console.log(`  ${theme.accent('model')} ${theme.bold(describeSelection(families, modelId, effort))}\n`)
+  }
+
+  /**
+   * Mengganti model sesi berjalan; riwayat percakapan tetap dipertahankan.
+   *
+   * Dua langkah: pilih keluarga, lalu pilih tingkat penalaran. Langkah kedua
+   * dilewati untuk keluarga yang hanya punya satu varian.
+   */
   async function changeModel(requested: string): Promise<void> {
     if (requested) {
-      provider.model = requested
-      console.log(`  ${theme.accent('model')} ${theme.bold(requested)}\n`)
+      const [modelId, effort] = requested.split(/\s+/)
+      const accepted = validEffort(modelId, effort)
+      if (effort && !accepted) {
+        console.log(`  ${theme.danger('tingkat tidak berlaku')} ${theme.muted(`"${effort}" untuk ${modelId}`)}\n`)
+        return
+      }
+      applyModel(groupModels([modelId]), modelId, accepted)
       return
     }
 
-    let available: string[]
+    let families: ModelFamily[]
     try {
-      available = await provider.listModels()
+      families = groupModels(await provider.listModels())
     } catch (error) {
       console.log(`  ${theme.danger('error')} ${error instanceof Error ? error.message : 'gagal'}\n`)
       return
     }
-    if (!available.length) {
+    if (!families.length) {
       console.log(`  ${theme.muted('9Router tidak mengembalikan model apa pun.')}\n`)
       return
     }
 
-    const activeIndex = Math.max(0, available.indexOf(provider.model))
-    console.log()
-    const picked = await select(readline, {
-      items: available,
-      activeIndex,
-      activeLabel: '(aktif)',
-      hint: 'panah atas/bawah memilih, enter memakai, esc membatalkan',
-    })
+    const featured = FEATURED_FAMILIES
+      .map((key) => families.find((family) => family.key === key))
+      .filter((family): family is ModelFamily => Boolean(family))
+    const others = families.filter((family) => !featured.includes(family))
+    const current = findSelection(families, provider.model, provider.reasoningEffort)
 
-    // undefined berarti terminal tidak mendukung panah; minta nomor sebagai gantinya.
-    if (picked === undefined) {
-      available.forEach((id, index) => {
-        const active = id === provider.model ? theme.accent(' <- aktif') : ''
-        console.log(`  ${theme.muted(String(index + 1).padStart(3))}  ${id}${active}`)
-      })
-      const answer = (await ask(`\n  ${theme.muted('nomor model [enter untuk batal] ')}`))?.trim()
-      if (!answer) {
-        console.log()
-        return
-      }
-      const choice = Number(answer)
-      const byNumber = Number.isInteger(choice) && choice >= 1 && choice <= available.length
-        ? available[choice - 1]
-        : available.includes(answer) ? answer : null
-      if (!byNumber) {
-        console.log(`  ${theme.danger('pilihan tidak dikenal')}\n`)
-        return
-      }
-      provider.model = byNumber
-      console.log(`  ${theme.accent('model')} ${theme.bold(byNumber)}\n`)
-      return
-    }
-
-    if (picked === null) {
+    // Langkah 1: keluarga unggulan, dengan model lain dilipat di bawahnya.
+    const firstPage = others.length ? [...featured.map((f) => f.label), OTHER_MODELS_LABEL] : featured.map((f) => f.label)
+    const currentInFeatured = current ? featured.indexOf(current.family) : -1
+    const firstActive = currentInFeatured !== -1 ? currentInFeatured : current && others.length ? featured.length : -1
+    const firstPick = await choose('Pilih model', firstPage, firstActive)
+    if (firstPick === null) {
       console.log(`  ${theme.muted('dibatalkan')}\n`)
       return
     }
-    provider.model = picked
-    console.log(`  ${theme.accent('model')} ${theme.bold(picked)}\n`)
+
+    let family: ModelFamily
+    if (firstPick === featured.length) {
+      const otherActive = current ? others.indexOf(current.family) : -1
+      const otherPick = await choose('Model lain', others.map((f) => f.label), otherActive)
+      if (otherPick === null) {
+        console.log(`  ${theme.muted('dibatalkan')}\n`)
+        return
+      }
+      family = others[otherPick]
+    } else {
+      family = featured[firstPick]
+    }
+
+    // Langkah 2: tingkat penalaran, hanya bila memang ada pilihan.
+    if (!family.source) {
+      applyModel(families, family.options[0].modelId, undefined)
+      return
+    }
+    // Kursor menunjuk tingkat yang sedang dipakai, atau medium sebagai saran
+    // bawaan — tetapi saran itu tidak boleh ditandai "(aktif)".
+    const sameFamily = current?.family === family ? family.options.indexOf(current.option) : -1
+    const medium = family.options.findIndex((option) => option.level === 'medium')
+    const effortPick = await choose(
+      `${family.label} · tingkat penalaran`,
+      family.options.map((option) => option.label),
+      sameFamily,
+      sameFamily !== -1 ? sameFamily : medium,
+    )
+    if (effortPick === null) {
+      console.log(`  ${theme.muted('dibatalkan')}\n`)
+      return
+    }
+    const option = family.options[effortPick]
+    applyModel(families, option.modelId, option.reasoningEffort)
   }
 
   console.log(`\n${banner()}\n`)
-  console.log(`  ${theme.accent('Boo Code')} ${theme.muted(`· ${model} · ${workspace}`)}`)
+  const activeModel = reasoningEffort ? `${model} · ${effortLabel(reasoningEffort)}` : model
+  console.log(`  ${theme.accent('Boo Code')} ${theme.muted(`· ${activeModel} · ${workspace}`)}`)
   console.log(`  ${theme.muted('ketik perintah, /help untuk daftar perintah')}\n`)
 
   for (;;) {

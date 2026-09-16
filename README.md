@@ -60,7 +60,7 @@ Dibaca berlapis; yang belakangan menimpa yang sebelumnya:
 | environment variable | selalu menang |
 
 Hanya kunci milik Boo yang diambil (`NINEROUTER_URL`, `NINEROUTER_KEY`,
-`BOO_MODEL`, `BOO_MAX_CONTEXT_TOKENS`). Berkas `.env` proyek lazim memuat rahasia
+`BOO_MODEL`, `BOO_EFFORT`, `BOO_MAX_CONTEXT_TOKENS`). Berkas `.env` proyek lazim memuat rahasia
 aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
 
 ### Bendera baris perintah
@@ -68,6 +68,7 @@ aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
 | Bendera | Fungsi |
 |---|---|
 | `--model <id>` | pilih model untuk sesi ini |
+| `--effort <tingkat>` | low, medium, high, atau xhigh untuk GPT-5.6 |
 | `--verbose` | tampilkan keluaran tool selengkapnya |
 | `--version` | tampilkan versi |
 | `--help` | tampilkan bantuan |
@@ -77,7 +78,7 @@ aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
 | Perintah | Fungsi |
 |---|---|
 | `/model` | pilih model dengan tombol panah |
-| `/model <id>` | ganti langsung, misal `/model cx/gpt-5.5` |
+| `/model <id> [tingkat]` | ganti langsung, misal `/model cx/gpt-5.6-sol xhigh` |
 | `/queue` | lihat permintaan yang mengantre |
 | `/queue hapus` | kosongkan antrean |
 | `/help` | daftar perintah |
@@ -107,9 +108,59 @@ itulah ia dibutuhkan. Spinner juga berhenti begitu kamu mulai mengetik, supaya
 animasinya tidak menimpa huruf yang sedang diketik.
 
 Pada `/model`, gunakan **panah atas/bawah** (atau `j`/`k`) untuk menelusuri,
-**enter** untuk memakai, **esc** untuk membatalkan. Daftar yang lebih panjang
-dari layar bergulir sendiri mengikuti kursor. Terminal yang tidak mendukung raw
-mode otomatis mendapat jalur cadangan berupa daftar bernomor yang diketik.
+**enter** untuk memakai, **esc** untuk membatalkan. Terminal yang tidak mendukung
+raw mode otomatis mendapat jalur cadangan berupa daftar bernomor yang diketik.
+
+### Memilih model dan tingkat penalaran
+
+9Router mendaftarkan setiap kombinasi model dan tingkat sebagai model terpisah,
+sehingga daftar mentahnya panjang dan berulang. `/model` meringkasnya menjadi dua
+langkah — pilih keluarga, lalu pilih tingkat penalaran:
+
+```
+  Pilih model                     GPT-5.6 Sol · tingkat penalaran
+   Gemini 3.5 Flash                  Low
+   Gemini 3.7 Flash                  Medium
+   Gemini 3.1 Pro                    High
+   GPT-5.6 Luna                    > Extra High
+   GPT-5.6 Terra
+ > GPT-5.6 Sol
+   Model lain…
+```
+
+Langkah kedua dilewati untuk keluarga yang hanya punya satu varian. Model lain —
+termasuk Claude Sonnet yang menjadi bawaan — tetap tersedia di bawah
+**Model lain…**.
+
+Tingkat penalaran disampaikan lewat dua mekanisme yang berbeda:
+
+| Keluarga | Tingkat berada di | Pilihan |
+|---|---|---|
+| Gemini 3.7 / 3.6 Flash | nama model | Low · Medium · High |
+| Gemini 3.5 Flash | nama model | Extra Low · Low · High |
+| Gemini 3.1 Pro | nama model | Low saja |
+| GPT-5.6 Sol · Terra · Luna | parameter `reasoning_effort` | Low · Medium · High · Extra High |
+
+Pemilih hanya menawarkan tingkat yang benar-benar ada — Gemini 3.5 Flash memang
+tidak punya Medium, dan tidak ada Gemini dengan Extra High.
+
+`reasoning_effort` untuk GPT-5.6 telah diverifikasi melewati 9Router: nilai tak
+valid ditolak upstream Codex dengan "Invalid value", dan keempat tingkat diterima.
+Model Codex lain belum diverifikasi sehingga tidak diberi pilihan tingkat. Besarnya
+efek tiap tingkat tidak dapat diukur dari sisi ini karena 9Router tidak melaporkan
+`reasoning_tokens`.
+
+Tingkat selalu dibuang saat berpindah ke model yang tidak menerimanya. Mengirim
+`reasoning_effort` ke model semacam itu membuat upstream menolak, dan 9Router lalu
+mengunci model tersebut beberapa puluh detik untuk semua permintaan berikutnya.
+
+Bentuk langsung dan bendera:
+
+```bash
+/model cx/gpt-5.6-sol xhigh          # di dalam sesi
+boo --model cx/gpt-5.6-terra --effort high
+BOO_EFFORT=high                       # di ~/.boo/.env
+```
 
 Mengganti model **tidak menghapus riwayat percakapan** — Boo melanjutkan dengan
 konteks yang sama memakai model baru.

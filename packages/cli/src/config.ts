@@ -22,6 +22,7 @@ const BOO_KEYS = [
   'NINEROUTER_URL',
   'NINEROUTER_KEY',
   'BOO_MODEL',
+  'BOO_EFFORT',
   'BOO_MAX_CONTEXT_TOKENS',
 ] as const
 

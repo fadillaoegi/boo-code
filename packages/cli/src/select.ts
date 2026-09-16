@@ -17,25 +17,36 @@ interface Key {
 }
 
 export interface SelectOptions {
+  /** Ditampilkan di atas daftar, misalnya "GPT-5.6 Sol · tingkat penalaran". */
+  title?: string
   items: string[]
-  /** Item yang disorot saat pemilih dibuka. */
+  /**
+   * Item yang sedang dipakai; diberi penanda activeLabel. -1 berarti tidak ada
+   * item yang aktif di daftar ini.
+   */
   activeIndex?: number
+  /**
+   * Posisi kursor saat pemilih dibuka. Dipisahkan dari activeIndex karena
+   * kursor boleh menunjuk saran bawaan tanpa mengklaim item itu sedang dipakai.
+   */
+  initialIndex?: number
   /** Ditampilkan di sebelah kanan item yang sedang dipakai. */
   activeLabel?: string
   hint?: string
 }
 
-const CURSOR_HIDE = '[?25l'
-const CURSOR_SHOW = '[?25h'
-const CLEAR_BELOW = '[0J'
+const CURSOR_HIDE = '\u001b[?25l'
+const CURSOR_SHOW = '\u001b[?25h'
+const CLEAR_BELOW = '\u001b[0J'
 
 /** Sisakan baris untuk hint dan ruang bernapas di atas serta bawah daftar. */
 const CHROME_ROWS = 4
 const MIN_VIEWPORT = 5
 
 function viewportSize(itemCount: number): number {
-  const available = (stdout.rows || 24) - CHROME_ROWS
-  return Math.max(MIN_VIEWPORT, Math.min(itemCount, available))
+  const available = Math.max(MIN_VIEWPORT, (stdout.rows || 24) - CHROME_ROWS)
+  // Tidak pernah melebihi jumlah item: daftar pendek tidak boleh diisi baris kosong.
+  return Math.min(itemCount, available)
 }
 
 /** Menggeser jendela tampilan supaya kursor selalu terlihat di dalamnya. */
@@ -45,29 +56,30 @@ function windowStart(cursor: number, size: number, total: number): number {
 }
 
 /**
- * Menampilkan pemilih dan mengembalikan item terpilih, atau null bila dibatalkan.
- * Mengembalikan undefined bila terminal tidak mendukung raw mode — pemanggil
- * harus menyediakan jalur cadangan berbasis ketikan.
+ * Menampilkan pemilih dan mengembalikan indeks item terpilih, atau null bila
+ * dibatalkan. Indeks, bukan label, karena label boleh kembar — "Low" muncul di
+ * banyak keluarga model. Mengembalikan undefined bila terminal tidak mendukung
+ * raw mode; pemanggil harus menyediakan jalur cadangan berbasis ketikan.
  */
 export function select(
   readline: ReadlineInterface,
-  { items, activeIndex = 0, activeLabel = '', hint = '' }: SelectOptions,
-): Promise<string | null | undefined> {
+  { title = '', items, activeIndex = -1, initialIndex, activeLabel = '', hint = '' }: SelectOptions,
+): Promise<number | null | undefined> {
   if (!stdin.isTTY || typeof stdin.setRawMode !== 'function' || !items.length) {
     return Promise.resolve(undefined)
   }
 
   return new Promise((resolve) => {
-    let cursor = Math.max(0, Math.min(activeIndex, items.length - 1))
+    let cursor = Math.max(0, Math.min(initialIndex ?? activeIndex, items.length - 1))
     const size = viewportSize(items.length)
     let painted = 0
 
     const draw = () => {
       // Hapus gambar sebelumnya agar penggambaran ulang terjadi di tempat sama.
-      if (painted) stdout.write(`[${painted}A${CLEAR_BELOW}`)
+      if (painted) stdout.write(`\u001b[${painted}A${CLEAR_BELOW}`)
 
       const start = windowStart(cursor, size, items.length)
-      const lines: string[] = []
+      const lines: string[] = title ? [`  ${theme.bold(title)}`] : []
       for (let index = start; index < start + size; index += 1) {
         const item = items[index]
         const selected = index === cursor
@@ -84,8 +96,10 @@ export function select(
       painted = lines.length
     }
 
-    const finish = (value: string | null) => {
+    const finish = (value: number | null) => {
       stdin.off('keypress', onKeypress)
+      stdin.off('end', onEnd)
+      for (const listener of borrowed) stdin.on('keypress', listener)
       stdin.setRawMode(false)
       stdout.write(CURSOR_SHOW)
       readline.resume()
@@ -110,7 +124,7 @@ export function select(
           cursor = items.length - 1
           return draw()
         case 'return':
-          return finish(items[cursor])
+          return finish(cursor)
         case 'escape':
         case 'q':
           return finish(null)
@@ -119,12 +133,26 @@ export function select(
       }
     }
 
+    // stdin yang tertutup saat pemilih terbuka tidak akan pernah mengirim tombol
+    // lagi; tanpa ini janji tidak pernah selesai dan proses menggantung.
+    const onEnd = () => finish(null)
+
     readline.pause()
     emitKeypressEvents(stdin)
+
+    // readline.pause() tidak mencegah readline membaca tombol, karena stdin
+    // dilanjutkan lagi untuk pemilih. Tanpa pemisahan ini panah atas memanggil
+    // riwayat ("/model" terakhir) dan enter mengirimnya ulang, sehingga pemilih
+    // terbuka kembali dan ketikan berikutnya jatuh ke dalamnya. Pendengar lain
+    // dipinjam selama pemilihan lalu dikembalikan persis seperti semula.
+    const borrowed = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
+    stdin.removeAllListeners('keypress')
+
     stdin.setRawMode(true)
     stdin.resume()
     stdout.write(CURSOR_HIDE)
     stdin.on('keypress', onKeypress)
+    stdin.once('end', onEnd)
     draw()
   })
 }
