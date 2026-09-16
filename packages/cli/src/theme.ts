@@ -6,6 +6,7 @@
  */
 
 import { fixedColor, themedColor } from '@boo/core/design/tokens.ts'
+import { LOGO_COLUMNS, LOGO_ROWS } from './logo.ts'
 
 /** Terminal modern mendukung warna 24-bit; hex token dipakai apa adanya. */
 function fg(hex: string): string {
@@ -64,15 +65,29 @@ const BANNER_RIGHT = [
   '    ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝',
 ]
 
-/** Lebar penuh banner termasuk indentasi dua spasi. */
+/** Lebar teks banner saja, termasuk indentasi dua spasi. */
 const BANNER_COLUMNS = 2 + BANNER_LEFT[0].length + BANNER_RIGHT[0].length
+
+/** Satu spasi memisahkan teks dari logo. */
+const BANNER_WITH_LOGO_COLUMNS = BANNER_COLUMNS + 1 + LOGO_COLUMNS
 
 /** Terminal sempit mendapat versi satu baris agar tidak terlipat dan rusak. */
 const COMPACT_BANNER = `  ${theme.accentBold('BOO')} ${theme.accent('CODE')}`
 
+/**
+ * Banner menyusut bertahap mengikuti lebar terminal: teks dengan logo, teks
+ * saja, lalu satu baris. Panjang string baris logo tidak sama dengan lebar
+ * tampilannya karena memuat kode ANSI, jadi lebarnya diambil dari
+ * LOGO_COLUMNS, bukan dari `.length`.
+ */
 export function banner(columns = process.stdout.columns || 80): string {
   if (columns < BANNER_COLUMNS) return COMPACT_BANNER
+
+  const withLogo = columns >= BANNER_WITH_LOGO_COLUMNS
   return BANNER_LEFT
-    .map((line, index) => `  ${theme.accentBold(line)}${theme.accent(BANNER_RIGHT[index])}`)
+    .map((line, index) => {
+      const text = `  ${theme.accentBold(line)}${theme.accent(BANNER_RIGHT[index])}`
+      return withLogo ? `${text} ${LOGO_ROWS[index]}` : text
+    })
     .join('\n')
 }

@@ -14,6 +14,28 @@ pnpm boo                     # jalankan di direktori yang ingin dikerjakan
 `boo` memperlakukan direktori kerja saat ini sebagai workspace dan tidak dapat
 menyentuh apa pun di luarnya.
 
+## Banner
+
+Banner menyusut bertahap mengikuti lebar terminal:
+
+| Lebar | Tampilan |
+|---|---|
+| ≥ 78 kolom | teks `BOO CODE` + logo panda |
+| ≥ 64 kolom | teks saja |
+| < 64 kolom | satu baris `BOO CODE` |
+
+Logo dirender sebagai ANSI half-block (satu karakter memuat dua piksel) dan
+**ditanam sebagai string** di `packages/cli/src/logo.ts`, sehingga CLI tidak
+memerlukan decoder PNG saat runtime. Regenerasi saat logo berubah:
+
+```bash
+python3 scripts/gen-logo.py   # butuh Pillow
+```
+
+Pada ukuran 13x12 piksel, yang membuat panda terbaca adalah kontras wajah putih
+terhadap lingkar mata — bukan siluetnya. Karena itu warna dibiarkan apa adanya
+dan kontrasnya dinaikkan; telinga hitam memang menyatu dengan latar terminal.
+
 ## Struktur
 
 ```text
