@@ -322,6 +322,46 @@ menghapus kalimat pengantar model, dan keluaran yang tiba selagi kamu mengetik
 permintaan berikutnya ditahan lalu dilepas setelah ketikan dikirim — tidak menyusup
 ke baris ketik maupun menghapus jawaban yang sedang mengalir.
 
+## Tampilan jawaban
+
+Jawaban model dirender dari markdown menjadi teks terminal yang rapi, dengan warna
+yang sama dengan web:
+
+| Markdown | Tampilan |
+|---|---|
+| `**tebal**`, `*miring*`, `~~coret~~` | gaya teks, tanpa penandanya |
+| `` `kode` `` | merah muda, sama dengan inline code di web |
+| `[label](url)` | label bergaris bawah, alamat redup |
+| `#`, `##`, `###` | tebal; dua tingkat pertama berwarna aksen |
+| `-`, `1.`, `- [ ]` | `•` `◦` `▪`, nomor, `☐` `☑`, dengan indentasi bertingkat |
+| blok kode | label bahasa, garis tepi, syntax highlighting |
+| tabel | bingkai, kolom sejajar, isi sel dibungkus bila terlalu lebar |
+| `>` | garis tepi aksen, miring |
+| `---` | garis pemisah redup |
+
+Teks dibungkus pada batas kata dengan indentasi gantung, sehingga lanjutan baris
+sejajar dengan awal isinya — termasuk di dalam butir daftar dan sel tabel. Lebar
+dihitung per kolom terminal, bukan per karakter: emoji dan aksara CJK memakan dua
+kolom, sehingga tabel berisi emoji tetap sejajar.
+
+### Tampil per baris lengkap
+
+Jawaban tiba sepotong-sepotong, dan konstruksi markdown sering terpotong di tengah
+(`**teb` lalu `al**`). Seperti Codex, sebuah baris baru ditampilkan setelah lengkap,
+sehingga gayanya diputuskan dengan pengetahuan penuh atas isinya: penanda yang tidak
+pernah ditutup tampil apa adanya, alih-alih membuat sisa jawaban tebal. Tabel
+ditahan sampai bloknya berakhir karena lebar kolom bergantung pada seluruh isinya.
+Selama baris belum lengkap, spinner Orchestrating tetap tampil.
+
+Aturan penekanan mengikuti CommonMark secara sederhana supaya teks teknis tidak
+rusak: `2 * 3 * 4` tetap apa adanya, `nama_variabel_ini` tidak miring, dan isi code
+span maupun blok kode tidak pernah diproses sebagai markdown.
+
+Syntax highlighting mengenali keluarga C (JS, TS, Go, Rust, Java, …), Python, shell,
+SQL, JSON/YAML, dan diff. Ia sengaja ringan — dipecah dengan ekspresi reguler, bukan
+parser — karena tujuannya membuat kode mudah dipindai, dan pustaka highlighter
+lengkap terlalu mahal untuk CLI yang dijalankan berkali-kali.
+
 ## Batas konteks
 
 Riwayat agent tumbuh jauh lebih cepat daripada chat biasa: satu `read_file`

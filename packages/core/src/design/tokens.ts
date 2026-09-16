@@ -51,6 +51,15 @@ export const fixedColor = {
   shadowInverse: '#a3a3a3',
   /** Shadow di atas permukaan merah. */
   shadowDanger: '#7f1d1d',
+  /** Inline code pada jawaban, sama dengan web dark mode. */
+  inlineCode: '#fda4af',
+  /** Syntax highlighting blok kode. Dipilih agar terbaca di latar gelap. */
+  syntaxKeyword: '#c4b5fd',
+  syntaxString: '#86efac',
+  syntaxNumber: '#fdba74',
+  syntaxComment: '#737373',
+  syntaxFunction: '#7dd3fc',
+  syntaxType: '#fcd34d',
 } as const satisfies Record<string, string>
 
 /**

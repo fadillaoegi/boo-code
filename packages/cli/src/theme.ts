@@ -20,6 +20,38 @@ const RESET = '\x1b[0m'
 const BOLD = '\x1b[1m'
 const DIM = '\x1b[2m'
 
+/** Gaya teks yang dapat digabung; diserialisasi menjadi satu urutan SGR. */
+export interface TextStyle {
+  bold?: boolean
+  dim?: boolean
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
+  /** Warna depan dalam hex token. */
+  color?: string
+}
+
+/**
+ * Urutan SGR lengkap untuk satu gaya, selalu diawali reset.
+ *
+ * Mematikan satu atribut terminal dapat ikut mematikan atribut lain — kode 22
+ * mematikan tebal sekaligus redup — jadi setiap pergantian gaya menulis ulang
+ * seluruh keadaan alih-alih mematikan atribut satu per satu.
+ */
+export function sgr(style: TextStyle): string {
+  const codes = ['0']
+  if (style.bold) codes.push('1')
+  if (style.dim) codes.push('2')
+  if (style.italic) codes.push('3')
+  if (style.underline) codes.push('4')
+  if (style.strike) codes.push('9')
+  let sequence = `\x1b[${codes.join(';')}m`
+  if (style.color) sequence += fg(style.color)
+  return sequence
+}
+
+export const RESET_STYLE = RESET
+
 /** Terminal umumnya berlatar gelap, jadi varian dark yang dipakai. */
 const palette = {
   ink: fg(themedColor.ink.dark),

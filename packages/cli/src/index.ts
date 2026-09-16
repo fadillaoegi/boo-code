@@ -23,6 +23,7 @@ import {
   type ModelFamily,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
+import { MarkdownRenderer } from './markdown.ts'
 import { select } from './select.ts'
 import {
   listSessions,
@@ -37,6 +38,14 @@ import { PhaseTally, phaseOf, StatusLine } from './status.ts'
 import { banner, theme } from './theme.ts'
 
 const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
+
+/**
+ * Jeda sebelum spinner muncul selagi baris jawaban belum lengkap. Tanpa jeda,
+ * butir daftar yang datang beruntun membuat spinner berkedip di antara baris.
+ */
+const WAITING_INDICATOR_MS = 200
+/** Batas lebar teks jawaban; baris yang terlalu panjang sulit dibaca. */
+const MAX_ANSWER_WIDTH = 120
 
 /**
  * Keluarga yang tampil di halaman pertama /model, sesuai urutan yang diminta.
@@ -740,27 +749,58 @@ async function main() {
       tally.reset()
       // Keterangan tool dicatat saat mulai; event tool-end hanya membawa nama.
       const previews = new Map<string, string>()
-      let streamingText = false
+      // Jawaban dirender per baris lengkap. Selama baris belum lengkap tidak ada
+      // yang tampil, jadi spinner menandakan Boo masih menulis.
+      let answer: MarkdownRenderer | null = null
+      let answerShown = false
+      let waiting: NodeJS.Timeout | null = null
+
+      const stopWaiting = () => {
+        if (waiting) clearTimeout(waiting)
+        waiting = null
+      }
+      const showAnswer = (output: string) => {
+        if (!output) return
+        status.clear()
+        if (!answerShown) {
+          emit('\n')
+          answerShown = true
+        }
+        emit(output)
+      }
+      /** Menuntaskan baris dan blok jawaban yang tertahan sebelum hal lain tampil. */
+      const finishAnswer = () => {
+        if (!answer) return
+        stopWaiting()
+        showAnswer(answer.end())
+        answer = null
+        answerShown = false
+      }
 
       // Model sudah dipanggil tetapi belum membalas apa pun.
       status.thinking()
 
       for await (const event of agent.send(input)) {
         switch (event.type) {
-          case 'text':
-            if (!streamingText) {
+          case 'text': {
+            if (!answer) {
               status.commit()
-              emit('\n  ')
-              streamingText = true
+              answer = new MarkdownRenderer({ width: Math.min(stdout.columns || 100, MAX_ANSWER_WIDTH) })
             }
-            emit(event.delta.replace(/\n/g, '\n  '))
+            stopWaiting()
+            showAnswer(answer.push(event.delta))
+            if (answer.hasPending) {
+              const pending = answer
+              waiting = setTimeout(() => {
+                waiting = null
+                if (answer === pending && pending.hasPending) status.thinking()
+              }, WAITING_INDICATOR_MS)
+            }
             break
+          }
 
           case 'tool-start': {
-            if (streamingText) {
-              emit('\n')
-              streamingText = false
-            }
+            finishAnswer()
             previews.set(event.callId, event.preview)
             const phase = phaseOf(event.name)
             status.work(phase, event.preview)
@@ -792,10 +832,7 @@ async function main() {
             // pengantar sebelum pemanggilan tool harus diakhiri dulu: spinner
             // menggambar dengan membersihkan barisnya dan akan menghapus kalimat itu.
             if (event.message.tool_calls?.length) {
-              if (streamingText) {
-                emit('\n')
-                streamingText = false
-              }
+              finishAnswer()
               status.thinking()
             }
             break
@@ -808,10 +845,7 @@ async function main() {
 
           case 'error':
             status.clear()
-            if (streamingText) {
-              emit('\n')
-              streamingText = false
-            }
+            finishAnswer()
             emit(`\n  ${theme.danger('error')} ${event.message}\n`)
             break
 
@@ -819,6 +853,7 @@ async function main() {
             break
         }
       }
+      finishAnswer()
       status.commit()
     } finally {
       // Ketikan yang belum dikirim tetap tersimpan di readline dan akan tampil lagi
