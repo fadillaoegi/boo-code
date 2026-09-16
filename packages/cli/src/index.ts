@@ -11,10 +11,13 @@ import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
 import { Agent, createDefaultRegistry, diffStats, NineRouterProvider, type DiffLine } from '@boo/core'
 import { select } from './select.ts'
+import { PhaseTally, phaseOf, StatusLine } from './status.ts'
 import { banner, theme } from './theme.ts'
 
 const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
 const DEFAULT_BASE_URL = 'http://localhost:20128'
+
+const VERBOSE = process.argv.includes('--verbose') || process.argv.includes('-v')
 
 const HELP = `  /model          pilih model dengan tombol panah
   /model <id>     ganti langsung, misal /model cx/gpt-5.5
@@ -36,6 +39,14 @@ function requireKey(): string {
   console.error(theme.danger('NINEROUTER_KEY belum di-set.'))
   console.error(theme.muted('Salin .env.example menjadi .env.local lalu isi key dari Dashboard 9Router.'))
   process.exit(1)
+}
+
+/**
+ * Mengambil berkas yang disentuh dari keterangan tool, misalnya "ubah hitung.js"
+ * menjadi "hitung.js", untuk ringkasan fase menerapkan.
+ */
+function targetOf(preview: string): string {
+  return preview.split(/\s+/)[1] ?? ''
 }
 
 /** Jumlah baris diff yang ditampilkan sebelum sisanya diringkas. */
@@ -92,8 +103,14 @@ async function main() {
 
   readline.on('line', (line) => {
     const waiter = waiting.shift()
-    if (waiter) waiter(line)
-    else buffered.push(line)
+    if (waiter) {
+      // Terminal interaktif sudah menggemakan ketikan; stdin yang dipipe tidak,
+      // sehingga prompt akan menempel pada keluaran berikutnya tanpa ini.
+      if (!stdout.isTTY) stdout.write(`${line}\n`)
+      waiter(line)
+    } else {
+      buffered.push(line)
+    }
   })
   readline.on('close', () => {
     ended = true
@@ -114,11 +131,15 @@ async function main() {
     return new Promise((resolve) => waiting.push(resolve))
   }
 
+  const status = new StatusLine()
+
   const agent = new Agent({
     provider,
     registry: createDefaultRegistry(),
     workspace,
     async askPermission({ preview, name, detail }) {
+      // Baris status hidup harus dibuang dulu; spinner akan menimpa prompt izin.
+      status.clear()
       if (detail?.length) console.log(`\n${renderDiff(detail)}`)
       // Pertanyaan izin sengaja memuat perintah utuh: pengguna menyetujui
       // tindakan yang terlihat, bukan nama tool yang abstrak.
@@ -210,39 +231,81 @@ async function main() {
       continue
     }
 
+    const tally = new PhaseTally()
+    tally.reset()
+    // Keterangan tool dicatat saat mulai; event tool-end hanya membawa nama.
+    const previews = new Map<string, string>()
     let streamingText = false
+
+    // Model sudah dipanggil tetapi belum membalas apa pun.
+    status.thinking()
+
     for await (const event of agent.send(input)) {
       switch (event.type) {
         case 'text':
           if (!streamingText) {
+            status.commit()
             stdout.write('\n  ')
             streamingText = true
           }
           stdout.write(event.delta.replace(/\n/g, '\n  '))
           break
-        case 'tool-start':
-          if (streamingText) { stdout.write('\n'); streamingText = false }
-          console.log(`\n  ${theme.accent('⏺')} ${theme.bold(event.name)}  ${theme.muted(event.preview)}`)
+
+        case 'tool-start': {
+          if (streamingText) {
+            stdout.write('\n')
+            streamingText = false
+          }
+          previews.set(event.callId, event.preview)
+          const phase = phaseOf(event.name)
+          status.work(phase, event.preview)
           break
-        case 'tool-end':
-          console.log(event.isError
-            ? `${theme.danger('    gagal')}\n${summarize(event.content)}`
-            : summarize(event.content))
+        }
+
+        case 'tool-end': {
+          tally.record(event.name, event.isError, targetOf(previews.get(event.callId) ?? ''))
+          const phase = phaseOf(event.name)
+          status.update(phase === 'menelaah' ? tally.exploring() : tally.applying())
+          // Kegagalan tidak boleh disembunyikan di balik ringkasan.
+          if (event.isError) {
+            status.commit()
+            console.log(`  ${theme.danger('gagal')} ${theme.bold(event.name)}\n${summarize(event.content, 4)}`)
+          } else if (VERBOSE) {
+            status.commit()
+            console.log(summarize(event.content))
+          }
           break
-        case 'context-trimmed':
-          console.log(`  ${theme.muted(`konteks dipangkas: ${event.droppedMessages} pesan lama dibuang (~${event.estimatedTokens} token terkirim)`)}`)
-          break
+        }
+
         case 'tool-denied':
+          status.clear()
           console.log(`  ${theme.muted(`${event.name} dilewati`)}`)
           break
+
+        case 'turn-end':
+          // Giliran berikutnya dimulai dengan model berpikir lagi.
+          if (event.message.tool_calls?.length) status.thinking()
+          break
+
+        case 'context-trimmed':
+          status.clear()
+          console.log(`  ${theme.muted(`konteks dipangkas: ${event.droppedMessages} pesan lama dibuang (~${event.estimatedTokens} token terkirim)`)}`)
+          break
+
         case 'error':
-          if (streamingText) { stdout.write('\n'); streamingText = false }
+          status.clear()
+          if (streamingText) {
+            stdout.write('\n')
+            streamingText = false
+          }
           console.log(`\n  ${theme.danger('error')} ${event.message}`)
           break
+
         default:
           break
       }
     }
+    status.commit()
     stdout.write('\n\n')
   }
 

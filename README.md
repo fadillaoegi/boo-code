@@ -57,6 +57,35 @@ packages/
 Dependency mengarah satu arah: CLI bergantung pada core, core tidak bergantung pada
 siapa pun. Web nanti menjadi konsumen kedua dari core yang sama, bukan salinannya.
 
+## Tampilan proses
+
+Menampilkan setiap isi berkas dan daftar direktori membuat terminal penuh ratusan
+baris yang hampir tidak pernah dibaca. Boo meringkasnya menjadi tiga fase yang
+mencerminkan apa yang benar-benar dikerjakan agent:
+
+| Fase | Kapan | Tool |
+|---|---|---|
+| **Menyusun** | model berpikir dan memutuskan langkah | — |
+| **Menelaah** | mengumpulkan konteks | `read_file`, `list_dir` |
+| **Menerapkan** | mengubah sesuatu | `write_file`, `edit_file`, `bash` |
+
+Fase yang berjalan tampil sebagai satu baris hidup dengan spinner, lalu dibekukan
+menjadi ringkasan saat selesai:
+
+```
+boo > Buat bagi() melempar Error kalau pembagi nol, lalu uji.
+
+  * Menelaah     1 berkas, 1 direktori  3.2s
+  * Menerapkan   hitung.js . 1 perintah  6.0s
+```
+
+**Menyusun tidak pernah dibekukan.** Model berpikir di antara setiap pemanggilan
+tool, sehingga membekukannya akan memenuhi layar dengan baris yang sama berulang.
+Penelaahan yang terpotong oleh proses berpikir tetap menyatu dalam satu baris.
+
+Kegagalan tool tidak pernah disembunyikan di balik ringkasan. Untuk melihat
+keluaran tool selengkapnya, jalankan dengan `--verbose`.
+
 ## Batas konteks
 
 Riwayat agent tumbuh jauh lebih cepat daripada chat biasa: satu `read_file`
