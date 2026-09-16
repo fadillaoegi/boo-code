@@ -6,3 +6,6 @@ dist
 .env
 .env.*
 !.env.example
+
+# Artefak build TypeScript
+*.tsbuildinfo
