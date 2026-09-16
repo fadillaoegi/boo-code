@@ -14,6 +14,28 @@ pnpm boo                     # jalankan di direktori yang ingin dikerjakan
 `boo` memperlakukan direktori kerja saat ini sebagai workspace dan tidak dapat
 menyentuh apa pun di luarnya.
 
+### Perintah di dalam sesi
+
+| Perintah | Fungsi |
+|---|---|
+| `/model` | tampilkan daftar model lalu pilih nomornya |
+| `/model <id>` | ganti langsung, misal `/model cx/gpt-5.5` |
+| `/help` | daftar perintah |
+| `/keluar` | akhiri sesi |
+
+Mengganti model **tidak menghapus riwayat percakapan** — Boo melanjutkan dengan
+konteks yang sama memakai model baru.
+
+### Memilih model saat menjalankan
+
+```bash
+pnpm boo --model cx/gpt-5.5     # flag baris perintah
+BOO_MODEL=ag/gemini-3-flash pnpm boo
+```
+
+Urutan prioritas: flag `--model`, lalu `BOO_MODEL` di `.env.local`, lalu bawaan
+`ag/claude-sonnet-4-6`.
+
 ## Struktur
 
 ```text
@@ -29,6 +51,26 @@ packages/
 
 Dependency mengarah satu arah: CLI bergantung pada core, core tidak bergantung pada
 siapa pun. Web nanti menjadi konsumen kedua dari core yang sama, bukan salinannya.
+
+## Batas konteks
+
+Riwayat agent tumbuh jauh lebih cepat daripada chat biasa: satu `read_file`
+menyuntikkan isi file penuh ke percakapan. Tanpa penanganan, sesi panjang akan
+melewati batas konteks model dan gagal.
+
+Sebelum tiap permintaan, riwayat dipangkas ke anggaran token (bawaan 100.000,
+dapat diatur lewat `maxContextTokens`). Riwayat penuh tetap tersimpan di memori —
+yang dipangkas hanya salinan yang dikirim. Saat terjadi, CLI memberi tahu:
+
+```
+konteks dipangkas: 5 pesan lama dibuang (~6000 token terkirim)
+```
+
+Pemangkasan bekerja **per blok, bukan per pesan**. Pesan assistant yang memanggil
+tool beserta seluruh hasil toolnya adalah satu kesatuan yang tidak boleh dipecah:
+API menolak `tool_result` yang kehilangan `tool_use` pemanggilnya, dan menolak
+pula bila sebagian hasilnya hilang. Bila satu blok saja sudah melebihi anggaran —
+lazim saat membaca file raksasa — isinya dipotong, bloknya tidak dibuang.
 
 ## Tool dan izin
 

@@ -8,6 +8,7 @@
 import type { Message } from '../domain/message.ts'
 import type { ToolRegistry } from '../domain/tool.ts'
 import type { NineRouterProvider } from '../provider/nineRouter.ts'
+import { DEFAULT_MAX_CONTEXT_TOKENS, trimToBudget } from './context.ts'
 import { BOO_SYSTEM_PROMPT } from './prompt.ts'
 
 export type AgentEvent =
@@ -17,6 +18,7 @@ export type AgentEvent =
   | { type: 'tool-end'; name: string; callId: string; content: string; isError: boolean }
   | { type: 'tool-denied'; name: string; callId: string }
   | { type: 'turn-end'; message: Message }
+  | { type: 'context-trimmed'; droppedMessages: number; estimatedTokens: number }
   | { type: 'error'; message: string }
 
 /** Ditanyakan sebelum tool berisiko dijalankan. */
@@ -33,6 +35,8 @@ export interface AgentOptions {
   askPermission: PermissionAsker
   /** Batas putaran agar model yang tersesat tidak berputar selamanya. */
   maxTurns?: number
+  /** Anggaran token untuk pesan yang dikirim; riwayat lama dipangkas di atasnya. */
+  maxContextTokens?: number
   systemPrompt?: string
 }
 
@@ -124,7 +128,19 @@ export class Agent {
   /** Meneruskan event streaming dan mengulang sekali bila balasannya kosong. */
   private async *streamTurn(provider: NineRouterProvider, registry: ToolRegistry) {
     for (let attempt = 0; ; attempt += 1) {
-      const stream = provider.stream(this.messages, registry.schemas())
+      // Riwayat penuh tetap disimpan; yang dipangkas hanya salinan yang dikirim.
+      const trimmed = trimToBudget(
+        this.messages,
+        this.options.maxContextTokens ?? DEFAULT_MAX_CONTEXT_TOKENS,
+      )
+      if (trimmed.droppedMessages && attempt === 0) {
+        yield {
+          type: 'context-trimmed',
+          droppedMessages: trimmed.droppedMessages,
+          estimatedTokens: trimmed.estimatedTokens,
+        } as AgentEvent
+      }
+      const stream = provider.stream(trimmed.messages, registry.schemas())
       let next = await stream.next()
       while (!next.done) {
         yield next.value as AgentEvent

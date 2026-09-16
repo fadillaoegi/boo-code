@@ -16,6 +16,7 @@ import type { Message, ToolCall, ToolSchema } from '../domain/message.ts'
 export interface ProviderOptions {
   baseUrl: string
   apiKey: string
+  /** Dapat diubah saat sesi berjalan lewat perintah /model. */
   model: string
   timeoutMs?: number
 }
@@ -81,6 +82,25 @@ export class NineRouterProvider {
 
   get model(): string {
     return this.options.model
+  }
+
+  /** Model dapat diganti di tengah sesi tanpa kehilangan riwayat percakapan. */
+  set model(model: string) {
+    this.options.model = model
+  }
+
+  /** Daftar model yang tersedia di instance 9Router. */
+  async listModels(): Promise<string[]> {
+    const { baseUrl, apiKey, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
+    const endpoint = new URL('v1/models', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
+    const response = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    const raw = await response.text()
+    if (!response.ok) throw new Error(errorMessage(raw, response.status))
+    const body = JSON.parse(raw) as { data?: Array<{ id?: string }> }
+    return (body.data ?? []).map((model) => model.id).filter((id): id is string => Boolean(id))
   }
 
   /**
