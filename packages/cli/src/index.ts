@@ -9,7 +9,9 @@
 
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
+import { readFileSync } from 'node:fs'
 import { Agent, createDefaultRegistry, diffStats, NineRouterProvider, type DiffLine } from '@boo/core'
+import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
 import { select } from './select.ts'
 import { PhaseTally, phaseOf, StatusLine } from './status.ts'
 import { banner, theme } from './theme.ts'
@@ -17,7 +19,37 @@ import { banner, theme } from './theme.ts'
 const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
 const DEFAULT_BASE_URL = 'http://localhost:20128'
 
-const VERBOSE = process.argv.includes('--verbose') || process.argv.includes('-v')
+const VERBOSE = process.argv.includes('--verbose')
+
+function version(): string {
+  try {
+    const manifest = new URL('../package.json', import.meta.url)
+    return (JSON.parse(readFileSync(manifest, 'utf8')) as { version?: string }).version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+const USAGE = `boo — coding agent oleh FLdev
+
+  boo                      mulai sesi di direktori saat ini
+  boo --model <id>         pilih model untuk sesi ini
+  boo --verbose            tampilkan keluaran tool selengkapnya
+  boo --version            tampilkan versi
+  boo --help               tampilkan bantuan ini
+
+Konfigurasi dibaca berlapis; yang belakangan menimpa yang sebelumnya:
+
+  ${GLOBAL_CONFIG_PATH}
+  <direktori kerja>/.env
+  <direktori kerja>/.env.local
+  environment variable
+
+Isi minimal:
+
+  NINEROUTER_URL=http://localhost:20128
+  NINEROUTER_KEY=sk-...
+  BOO_MODEL=ag/claude-sonnet-4-6`
 
 const HELP = `  /model          pilih model dengan tombol panah
   /model <id>     ganti langsung, misal /model cx/gpt-5.5
@@ -38,11 +70,13 @@ function modelFromArgs(): string | undefined {
   return inline?.slice('--model='.length)
 }
 
-function requireKey(): string {
-  const key = process.env.NINEROUTER_KEY
+function requireKey(key: string | undefined): string {
   if (key) return key
-  console.error(theme.danger('NINEROUTER_KEY belum di-set.'))
-  console.error(theme.muted('Salin .env.example menjadi .env.local lalu isi key dari Dashboard 9Router.'))
+  console.error(theme.danger('NINEROUTER_KEY belum dikonfigurasi.'))
+  console.error(theme.muted(`Buat ${GLOBAL_CONFIG_PATH} berisi:`))
+  console.error(theme.muted('  NINEROUTER_URL=http://localhost:20128'))
+  console.error(theme.muted('  NINEROUTER_KEY=sk-...  (dari Dashboard 9Router)'))
+  console.error(theme.muted('Atau letakkan .env.local di direktori kerja.'))
   process.exit(1)
 }
 
@@ -82,13 +116,23 @@ function summarize(content: string, maxLines = 6): string {
 }
 
 async function main() {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    console.log(USAGE)
+    return
+  }
+  if (process.argv.includes('--version') || process.argv.includes('-V')) {
+    console.log(version())
+    return
+  }
+
   const workspace = process.cwd()
-  // Urutan prioritas: flag baris perintah, lalu .env.local, lalu bawaan.
-  const model = modelFromArgs() || process.env.BOO_MODEL || DEFAULT_MODEL
+  const config = loadConfig(workspace)
+  // Urutan prioritas: flag baris perintah, lalu konfigurasi, lalu bawaan.
+  const model = modelFromArgs() || config.BOO_MODEL || DEFAULT_MODEL
 
   const provider = new NineRouterProvider({
-    baseUrl: process.env.NINEROUTER_URL || DEFAULT_BASE_URL,
-    apiKey: requireKey(),
+    baseUrl: config.NINEROUTER_URL || DEFAULT_BASE_URL,
+    apiKey: requireKey(config.NINEROUTER_KEY),
     model,
   })
 
@@ -206,6 +250,9 @@ async function main() {
     provider,
     registry: createDefaultRegistry(),
     workspace,
+    ...(config.BOO_MAX_CONTEXT_TOKENS
+      ? { maxContextTokens: Number(config.BOO_MAX_CONTEXT_TOKENS) }
+      : {}),
     async askPermission({ preview, name, detail }) {
       // Baris status hidup harus dibuang dulu; spinner akan menimpa prompt izin.
       status.clear()

@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "boo": "node --env-file-if-exists=.env.local packages/cli/src/index.ts",
+    "boo": "node packages/cli/src/index.ts",
+    "link": "pnpm --filter boo-code link --global",
+    "unlink": "pnpm --filter boo-code unlink --global",
     "lint": "eslint .",
     "test": "node --test packages/*/tests/*.test.ts",
     "typecheck": "tsc -b"

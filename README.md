@@ -3,16 +3,74 @@
 Coding agent buatan FLdev. Satu otak (`@boo/core`), dua antarmuka: CLI `boo` hari ini,
 web menyusul. Nama produknya Boo Code; CLI dan web hanyalah dua cara menjalankannya. Model diakses lewat [9Router](http://localhost:20128) sebagai satu pintu.
 
-## Menjalankan
+## Memasang secara global
 
 ```bash
 pnpm install
-cp .env.example .env.local   # isi NINEROUTER_KEY
-pnpm boo                     # jalankan di direktori yang ingin dikerjakan
+cd packages/cli && npm link      # binary `boo` dan `boo-code` tersedia global
+```
+
+Lalu buat setelan tetap sekali saja:
+
+```bash
+mkdir -p ~/.boo
+cat > ~/.boo/.env <<'ENV'
+NINEROUTER_URL=http://localhost:20128
+NINEROUTER_KEY=sk-...
+BOO_MODEL=ag/claude-sonnet-4-6
+ENV
+chmod 600 ~/.boo/.env
+```
+
+Setelah itu `boo` dapat dipanggil dari direktori mana pun:
+
+```bash
+cd ~/proyek/apa-saja
+boo                    # atau boo-code
+```
+
+Melepasnya: `npm unlink -g boo-code`.
+
+> `npm link` dipakai karena direktori bin globalnya biasanya sudah ada di PATH.
+> `pnpm link --global` juga bisa, tetapi memerlukan `pnpm setup` lebih dulu yang
+> mengubah berkas konfigurasi shell.
+>
+> Paket ini belum siap `npm publish`: `@boo/core` masih berupa dependency
+> workspace, sehingga pemasangan dari registry memerlukan langkah build yang
+> menyatukannya lebih dulu.
+
+## Menjalankan dari dalam repo
+
+```bash
+pnpm boo                     # tanpa memasang global
 ```
 
 `boo` memperlakukan direktori kerja saat ini sebagai workspace dan tidak dapat
 menyentuh apa pun di luarnya.
+
+### Konfigurasi
+
+Dibaca berlapis; yang belakangan menimpa yang sebelumnya:
+
+| Sumber | Untuk |
+|---|---|
+| `~/.boo/.env` | setelan tetap milik pengguna |
+| `<direktori kerja>/.env` | setelan proyek |
+| `<direktori kerja>/.env.local` | setelan proyek yang tidak di-commit |
+| environment variable | selalu menang |
+
+Hanya kunci milik Boo yang diambil (`NINEROUTER_URL`, `NINEROUTER_KEY`,
+`BOO_MODEL`, `BOO_MAX_CONTEXT_TOKENS`). Berkas `.env` proyek lazim memuat rahasia
+aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
+
+### Bendera baris perintah
+
+| Bendera | Fungsi |
+|---|---|
+| `--model <id>` | pilih model untuk sesi ini |
+| `--verbose` | tampilkan keluaran tool selengkapnya |
+| `--version` | tampilkan versi |
+| `--help` | tampilkan bantuan |
 
 ### Perintah di dalam sesi
 

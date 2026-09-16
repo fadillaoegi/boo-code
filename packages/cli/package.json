@@ -1,10 +1,17 @@
 {
   "name": "boo-code",
   "version": "0.1.0",
-  "private": true,
+  "description": "Coding agent oleh FLdev, berjalan di terminal melalui 9Router.",
   "type": "module",
   "bin": {
-    "boo": "./src/index.ts"
+    "boo": "./src/index.ts",
+    "boo-code": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=24"
   },
   "dependencies": {
     "@boo/core": "workspace:*"
