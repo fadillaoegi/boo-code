@@ -10,7 +10,7 @@
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
 import { Agent, createDefaultRegistry, NineRouterProvider } from '@boo/core'
-import { BANNER, theme } from './theme.ts'
+import { banner, theme } from './theme.ts'
 
 const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
 const DEFAULT_BASE_URL = 'http://localhost:20128'
@@ -61,8 +61,8 @@ async function main() {
     },
   })
 
-  console.log(`\n${BANNER}\n`)
-  console.log(`  ${theme.accent('Boo')} ${theme.muted(`· ${model} · ${workspace}`)}`)
+  console.log(`\n${banner()}\n`)
+  console.log(`  ${theme.accent('Boo-code')} ${theme.muted(`· ${model} · ${workspace}`)}`)
   console.log(`  ${theme.muted('ketik perintah, atau /keluar untuk berhenti')}\n`)
 
   for (;;) {

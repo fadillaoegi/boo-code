@@ -42,9 +42,37 @@ export const theme = {
   bold: (text: string) => `${BOLD}${text}${RESET}`,
 }
 
-export const BANNER = `${theme.accentBold('  ██████╗  ██████╗  ██████╗ ')}
-${theme.accentBold('  ██╔══██╗██╔═══██╗██╔═══██╗')}
-${theme.accentBold('  ██████╔╝██║   ██║██║   ██║')}
-${theme.accentBold('  ██╔══██╗██║   ██║██║   ██║')}
-${theme.accentBold('  ██████╔╝╚██████╔╝╚██████╔╝')}
-${theme.accentBold('  ╚═════╝  ╚═════╝  ╚═════╝ ')}`
+/**
+ * Banner "BOO-CODE". Bagian "BOO" memakai accentStrong dan "-CODE" memakai
+ * accent, keduanya dari token yang sama dengan web.
+ */
+const BANNER_LEFT = [
+  '██████╗  ██████╗  ██████╗ ',
+  '██╔══██╗██╔═══██╗██╔═══██╗',
+  '██████╔╝██║   ██║██║   ██║',
+  '██╔══██╗██║   ██║██║   ██║',
+  '██████╔╝╚██████╔╝╚██████╔╝',
+  '╚═════╝  ╚═════╝  ╚═════╝ ',
+]
+
+const BANNER_RIGHT = [
+  '       ██████╗ ██████╗ ██████╗ ███████╗',
+  '      ██╔════╝██╔═══██╗██╔══██╗██╔════╝',
+  '█████╗██║     ██║   ██║██║  ██║█████╗  ',
+  '╚════╝██║     ██║   ██║██║  ██║██╔══╝  ',
+  '      ╚██████╗╚██████╔╝██████╔╝███████╗',
+  '       ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝',
+]
+
+/** Lebar penuh banner termasuk indentasi dua spasi. */
+const BANNER_COLUMNS = 2 + BANNER_LEFT[0].length + BANNER_RIGHT[0].length
+
+/** Terminal sempit mendapat versi satu baris agar tidak terlipat dan rusak. */
+const COMPACT_BANNER = `  ${theme.accentBold('BOO')}${theme.accent('-CODE')}`
+
+export function banner(columns = process.stdout.columns || 80): string {
+  if (columns < BANNER_COLUMNS) return COMPACT_BANNER
+  return BANNER_LEFT
+    .map((line, index) => `  ${theme.accentBold(line)}${theme.accent(BANNER_RIGHT[index])}`)
+    .join('\n')
+}
