@@ -18,10 +18,15 @@ menyentuh apa pun di luarnya.
 
 | Perintah | Fungsi |
 |---|---|
-| `/model` | tampilkan daftar model lalu pilih nomornya |
+| `/model` | pilih model dengan tombol panah |
 | `/model <id>` | ganti langsung, misal `/model cx/gpt-5.5` |
 | `/help` | daftar perintah |
 | `/keluar` | akhiri sesi |
+
+Pada `/model`, gunakan **panah atas/bawah** (atau `j`/`k`) untuk menelusuri,
+**enter** untuk memakai, **esc** untuk membatalkan. Daftar yang lebih panjang
+dari layar bergulir sendiri mengikuti kursor. Terminal yang tidak mendukung raw
+mode otomatis mendapat jalur cadangan berupa daftar bernomor yang diketik.
 
 Mengganti model **tidak menghapus riwayat percakapan** — Boo melanjutkan dengan
 konteks yang sama memakai model baru.

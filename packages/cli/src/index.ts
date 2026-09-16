@@ -10,13 +10,14 @@
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
 import { Agent, createDefaultRegistry, NineRouterProvider } from '@boo/core'
+import { select } from './select.ts'
 import { banner, theme } from './theme.ts'
 
 const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
 const DEFAULT_BASE_URL = 'http://localhost:20128'
 
-const HELP = `  /model          ganti model AI
-  /model <id>     ganti langsung ke model tertentu
+const HELP = `  /model          pilih model dengan tombol panah
+  /model <id>     ganti langsung, misal /model cx/gpt-5.5
   /help           tampilkan bantuan ini
   /keluar         akhiri sesi`
 
@@ -81,13 +82,16 @@ async function main() {
   })
 
   function ask(prompt: string): Promise<string | null> {
-    stdout.write(prompt)
     const queued = buffered.shift()
     if (queued !== undefined) {
-      stdout.write(`${queued}\n`)
+      stdout.write(`${prompt}${queued}\n`)
       return Promise.resolve(queued)
     }
     if (ended) return Promise.resolve(null)
+    // Prompt digambar readline sendiri; menulisnya lewat stdout.write akan
+    // ditimpa oleh prompt bawaan readline saat ia menggambar ulang barisnya.
+    readline.setPrompt(prompt)
+    readline.prompt()
     return new Promise((resolve) => waiting.push(resolve))
   }
 
@@ -126,24 +130,41 @@ async function main() {
       return
     }
 
+    const activeIndex = Math.max(0, available.indexOf(provider.model))
     console.log()
-    available.forEach((id, index) => {
-      const active = id === provider.model ? theme.accent(' ← aktif') : ''
-      console.log(`  ${theme.muted(String(index + 1).padStart(3))}  ${id}${active}`)
+    const picked = await select(readline, {
+      items: available,
+      activeIndex,
+      activeLabel: '(aktif)',
+      hint: 'panah atas/bawah memilih, enter memakai, esc membatalkan',
     })
 
-    const answer = (await ask(`\n  ${theme.muted('nomor model [enter untuk batal] ')}`))?.trim()
-    if (!answer) {
-      console.log()
+    // undefined berarti terminal tidak mendukung panah; minta nomor sebagai gantinya.
+    if (picked === undefined) {
+      available.forEach((id, index) => {
+        const active = id === provider.model ? theme.accent(' <- aktif') : ''
+        console.log(`  ${theme.muted(String(index + 1).padStart(3))}  ${id}${active}`)
+      })
+      const answer = (await ask(`\n  ${theme.muted('nomor model [enter untuk batal] ')}`))?.trim()
+      if (!answer) {
+        console.log()
+        return
+      }
+      const choice = Number(answer)
+      const byNumber = Number.isInteger(choice) && choice >= 1 && choice <= available.length
+        ? available[choice - 1]
+        : available.includes(answer) ? answer : null
+      if (!byNumber) {
+        console.log(`  ${theme.danger('pilihan tidak dikenal')}\n`)
+        return
+      }
+      provider.model = byNumber
+      console.log(`  ${theme.accent('model')} ${theme.bold(byNumber)}\n`)
       return
     }
 
-    const choice = Number(answer)
-    const picked = Number.isInteger(choice) && choice >= 1 && choice <= available.length
-      ? available[choice - 1]
-      : available.includes(answer) ? answer : null
-    if (!picked) {
-      console.log(`  ${theme.danger('pilihan tidak dikenal')}\n`)
+    if (picked === null) {
+      console.log(`  ${theme.muted('dibatalkan')}\n`)
       return
     }
     provider.model = picked
