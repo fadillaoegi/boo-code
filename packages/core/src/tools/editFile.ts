@@ -1,5 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import type { Tool } from '../domain/tool.ts'
+import { condense, diffLines, type DiffLine } from './diff.ts'
+import { isSensitivePath, sensitiveRefusal } from './secrets.ts'
 import { resolveInWorkspace } from './workspace.ts'
 
 interface Args { path: string; old_text: string; new_text: string }
@@ -25,7 +27,14 @@ export const editFileTool: Tool<Args> = {
     },
   },
   preview: (args) => `ubah ${args.path}`,
+  async detail(args): Promise<DiffLine[] | null> {
+    if (args.old_text === args.new_text) return null
+    return condense(diffLines(args.old_text, args.new_text))
+  },
   async run(args, context) {
+    if (isSensitivePath(args.path)) {
+      return { content: sensitiveRefusal(args.path), isError: true }
+    }
     const target = resolveInWorkspace(context.workspace, args.path)
     const original = await readFile(target, 'utf8')
 

@@ -9,7 +9,7 @@
 
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
-import { Agent, createDefaultRegistry, NineRouterProvider } from '@boo/core'
+import { Agent, createDefaultRegistry, diffStats, NineRouterProvider, type DiffLine } from '@boo/core'
 import { select } from './select.ts'
 import { banner, theme } from './theme.ts'
 
@@ -36,6 +36,25 @@ function requireKey(): string {
   console.error(theme.danger('NINEROUTER_KEY belum di-set.'))
   console.error(theme.muted('Salin .env.example menjadi .env.local lalu isi key dari Dashboard 9Router.'))
   process.exit(1)
+}
+
+/** Jumlah baris diff yang ditampilkan sebelum sisanya diringkas. */
+const MAX_DIFF_PREVIEW_LINES = 40
+
+/** Menggambar diff berwarna: hijau untuk tambahan, merah untuk penghapusan. */
+function renderDiff(detail: DiffLine[]): string {
+  const { added, removed } = diffStats(detail)
+  const shown = detail.slice(0, MAX_DIFF_PREVIEW_LINES)
+  const body = shown.map((line) => {
+    if (line.kind === 'add') return theme.added(`    + ${line.text}`)
+    if (line.kind === 'remove') return theme.removed(`    - ${line.text}`)
+    return theme.muted(`      ${line.text}`)
+  })
+  if (detail.length > shown.length) {
+    body.push(theme.muted(`    … ${detail.length - shown.length} baris diff lagi`))
+  }
+  const summary = theme.muted(`    ${added} baris ditambah, ${removed} dihapus`)
+  return `${body.join('\n')}\n${summary}`
 }
 
 /** Memangkas keluaran tool agar terminal tidak tenggelam oleh isi file. */
@@ -99,7 +118,8 @@ async function main() {
     provider,
     registry: createDefaultRegistry(),
     workspace,
-    async askPermission({ preview, name }) {
+    async askPermission({ preview, name, detail }) {
+      if (detail?.length) console.log(`\n${renderDiff(detail)}`)
       // Pertanyaan izin sengaja memuat perintah utuh: pengguna menyetujui
       // tindakan yang terlihat, bukan nama tool yang abstrak.
       const answer = await ask(

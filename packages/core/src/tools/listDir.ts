@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises'
 import type { Tool } from '../domain/tool.ts'
+import { isSensitivePath } from './secrets.ts'
 import { resolveInWorkspace } from './workspace.ts'
 
 const IGNORED = new Set(['node_modules', '.git', 'dist', '.DS_Store'])
@@ -29,7 +30,11 @@ export const listDirTool: Tool<Args> = {
     const entries = await readdir(target, { withFileTypes: true })
     const visible = entries
       .filter((entry) => !IGNORED.has(entry.name))
-      .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
+      // File rahasia tetap terdaftar — model perlu tahu ia ada — tetapi
+      // ditandai agar tidak membuang giliran mencoba membacanya.
+      .map((entry) => entry.isDirectory()
+        ? `${entry.name}/`
+        : isSensitivePath(entry.name) ? `${entry.name}  [rahasia, tidak dapat dibaca]` : entry.name)
       .sort()
     return { content: visible.length ? visible.join('\n') : '(kosong)' }
   },

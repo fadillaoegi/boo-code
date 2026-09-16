@@ -27,6 +27,8 @@ const palette = {
   accent: fg(fixedColor.accent),
   accentStrong: fg(fixedColor.accentStrong),
   danger: fg(fixedColor.danger),
+  added: fg(fixedColor.added),
+  removed: fg(fixedColor.removed),
 }
 
 function paint(color: string, text: string, bold = false): string {
@@ -39,6 +41,8 @@ export const theme = {
   ink: (text: string) => paint(palette.ink, text),
   muted: (text: string) => `${DIM}${palette.muted}${text}${RESET}`,
   danger: (text: string) => paint(palette.danger, text, true),
+  added: (text: string) => paint(palette.added, text),
+  removed: (text: string) => paint(palette.removed, text),
   bold: (text: string) => `${BOLD}${text}${RESET}`,
 }
 

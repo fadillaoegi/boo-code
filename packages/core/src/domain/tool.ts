@@ -1,6 +1,7 @@
 /** Kontrak tool. Detail filesystem dan shell berada di lapisan tools/. */
 
 import type { ToolSchema } from './message.ts'
+import type { DiffLine } from '../tools/diff.ts'
 
 /**
  * `safe`    — hanya membaca, dijalankan tanpa bertanya.
@@ -25,6 +26,12 @@ export interface Tool<TArgs = Record<string, unknown>> {
   schema: ToolSchema
   /** Ringkasan satu baris untuk ditampilkan saat meminta izin. */
   preview(args: TArgs): string
+  /**
+   * Pratinjau rinci perubahan — biasanya diff — yang ditampilkan sebelum
+   * pengguna memberi izin. Tool yang tidak mengubah apa pun tidak perlu
+   * menyediakannya.
+   */
+  detail?(args: TArgs, context: ToolContext): Promise<DiffLine[] | null>
   run(args: TArgs, context: ToolContext): Promise<ToolResult>
 }
 

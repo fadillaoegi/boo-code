@@ -13,3 +13,4 @@ export function createDefaultRegistry() {
 
 export { bashTool, editFileTool, listDirTool, readFileTool, writeFileTool }
 export { resolveInWorkspace, WorkspaceError } from './workspace.ts'
+export { isSensitivePath, sensitiveRefusal } from './secrets.ts'

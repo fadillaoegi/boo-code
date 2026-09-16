@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import type { Tool } from '../domain/tool.ts'
+import { isSensitivePath, sensitiveRefusal } from './secrets.ts'
 import { resolveInWorkspace } from './workspace.ts'
 
 const MAX_CHARACTERS = 60_000
@@ -26,6 +27,9 @@ export const readFileTool: Tool<Args> = {
   },
   preview: (args) => `baca ${args.path}`,
   async run(args, context) {
+    if (isSensitivePath(args.path)) {
+      return { content: sensitiveRefusal(args.path), isError: true }
+    }
     const target = resolveInWorkspace(context.workspace, args.path)
     const raw = await readFile(target, 'utf8')
     // Nomor baris membantu model merujuk lokasi saat mengedit.

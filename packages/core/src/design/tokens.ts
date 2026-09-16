@@ -43,6 +43,9 @@ export const fixedColor = {
   accentInk: '#0c4a6e',
   /** Status merusak / hapus. */
   danger: '#ef4444',
+  /** Baris yang ditambah dan dihapus pada pratinjau diff. */
+  added: '#4ade80',
+  removed: '#f87171',
   dangerStrong: '#dc2626',
   /** Shadow di atas permukaan gelap (bubble user, tombol hitam). */
   shadowInverse: '#a3a3a3',

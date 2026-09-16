@@ -6,6 +6,7 @@
  */
 
 import type { Message } from '../domain/message.ts'
+import type { DiffLine } from '../tools/diff.ts'
 import type { ToolRegistry } from '../domain/tool.ts'
 import type { NineRouterProvider } from '../provider/nineRouter.ts'
 import { DEFAULT_MAX_CONTEXT_TOKENS, trimToBudget } from './context.ts'
@@ -26,6 +27,8 @@ export type PermissionAsker = (request: {
   name: string
   preview: string
   args: Record<string, unknown>
+  /** Diff perubahan bila tool menyediakannya; null berarti tak ada yang berubah. */
+  detail: DiffLine[] | null
 }) => Promise<boolean>
 
 export interface AgentOptions {
@@ -98,7 +101,15 @@ export class Agent {
 
         const preview = tool.preview(args as never)
         if (tool.risk === 'confirm') {
-          const allowed = await this.options.askPermission({ name: tool.name, preview, args })
+          // Pratinjau gagal bukan alasan membatalkan; izin tetap diminta,
+          // hanya saja tanpa diff.
+          let detail: DiffLine[] | null
+          try {
+            detail = await tool.detail?.(args as never, { workspace: this.options.workspace }) ?? null
+          } catch {
+            detail = null
+          }
+          const allowed = await this.options.askPermission({ name: tool.name, preview, args, detail })
           if (!allowed) {
             yield { type: 'tool-denied', name: tool.name, callId: call.id }
             this.pushToolResult(call.id, 'Ditolak oleh pengguna. Jangan ulangi; tanyakan langkah berikutnya.')
