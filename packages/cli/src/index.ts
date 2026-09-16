@@ -452,18 +452,24 @@ async function main() {
   console.log(`  ${theme.muted('ketik perintah, /help untuk daftar perintah')}\n`)
 
   for (;;) {
+    // Nama model di baris sendiri dan tempat mengetik di bawahnya. Header dicetak
+    // terpisah, bukan dijadikan bagian prompt: prompt readline yang memuat baris
+    // baru rusak saat readline menggambar ulang barisnya, misalnya ketika riwayat
+    // dipanggil atau ketikan dipulihkan setelah spinner berhenti.
     // Dibangun ulang setiap putaran agar selalu mencerminkan model yang sedang
     // dipakai, termasuk sesaat setelah /model mengubahnya.
-    const promptText = `${theme.accentBold('boo')} ${theme.muted(`· ${modelLabel(provider.model, provider.reasoningEffort)}`)} ${theme.accent('›')} `
+    const header = `${theme.accentBold('boo')} ${theme.muted(`· ${modelLabel(provider.model, provider.reasoningEffort)}`)}`
+    const promptText = `${theme.accentBold('›')} `
     let input: string
 
     // Permintaan yang sudah mengantre dikerjakan lebih dulu, berurutan.
     const queued = pending.shift()
     if (queued !== undefined) {
       const sisa = pending.length ? theme.muted(`  (${pending.length} lagi mengantre)`) : ''
-      stdout.write(`${promptText}${queued}${sisa}\n`)
+      stdout.write(`${header}\n${promptText}${queued}${sisa}\n`)
       input = queued
     } else {
+      stdout.write(`${header}\n`)
       const answer = await ask(promptText)
       if (answer === null) break
       input = answer.trim()

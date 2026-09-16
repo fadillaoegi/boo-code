@@ -75,17 +75,22 @@ aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
 
 ### Prompt
 
-Prompt menampilkan model dan tingkat penalaran yang sedang dipakai, dan ikut
-berubah begitu `/model` menggantinya:
+Model dan tingkat penalaran yang sedang dipakai tampil di atas baris ketik, dan
+ikut berubah begitu `/model` menggantinya:
 
 ```
-boo · Claude Sonnet 4.6 >
-boo · GPT-5.6 Sol · Extra High >
-boo · Gemini 3.7 Flash · High >
+boo · GPT-5.6 Sol · Extra High
+> _
 ```
 
 Namanya diturunkan dari id model saja, tanpa memanggil 9Router, sehingga aman
-digambar ulang setiap kali prompt muncul.
+dibangun ulang setiap kali prompt muncul.
+
+Baris nama dicetak terpisah, bukan dijadikan bagian prompt readline. Prompt yang
+memuat baris baru rusak saat readline menggambar ulang barisnya — ketika riwayat
+dipanggil dengan panah atas, atau ketika ketikan dipulihkan setelah spinner
+berhenti — karena readline hanya kembali ke awal baris ketik lalu membersihkan
+ke bawah.
 
 ### Perintah di dalam sesi
 
