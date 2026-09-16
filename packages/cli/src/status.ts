@@ -8,21 +8,21 @@
  * Satu baris digambar ulang di tempat selama sebuah fase berjalan, lalu
  * dibekukan menjadi ringkasan ketika fase berganti.
  *
- * "Menyusun" tidak pernah dibekukan. Model berpikir di antara setiap pemanggilan
- * tool, sehingga membekukannya akan memenuhi layar dengan baris yang sama
- * berulang-ulang. Ia hanya tampil hidup, lalu digantikan fase berikutnya.
+ * "Orchestrating" tidak pernah dibekukan. Model berpikir di antara setiap
+ * pemanggilan tool, sehingga membekukannya akan memenuhi layar dengan baris yang
+ * sama berulang-ulang. Ia hanya tampil hidup, lalu digantikan fase berikutnya.
  */
 
 import { stdout } from 'node:process'
 import { theme } from './theme.ts'
 
 /** Tiga fase yang mencerminkan apa yang benar-benar dikerjakan agent. */
-export type Phase = 'menyusun' | 'menelaah' | 'menerapkan'
+export type Phase = 'orchestrating' | 'exploring' | 'applying'
 
 export const PHASE_LABEL: Record<Phase, string> = {
-  menyusun: 'Menyusun',
-  menelaah: 'Menelaah',
-  menerapkan: 'Menerapkan',
+  orchestrating: 'Orchestrating',
+  exploring: 'Exploring',
+  applying: 'Applying',
 }
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -44,24 +44,26 @@ export class StatusLine {
   private readonly interactive = Boolean(stdout.isTTY)
   private timer: NodeJS.Timeout | null = null
   private frame = 0
-  /** Fase kerja yang akan dibekukan; menyusun tidak pernah mengisinya. */
+  /** Fase kerja yang akan dibekukan; orchestrating tidak pernah mengisinya. */
   private phase: Phase | null = null
   private detail = ''
   private startedAt = 0
   /** Apa yang sedang digambar — bisa berbeda dari fase kerja saat model berpikir. */
   private showing: Phase | null = null
   private live = false
+  /** Pengguna sedang mengetik; baris tidak boleh digambar ulang di atas ketikannya. */
+  private typing = false
 
   /** Model sedang berpikir. Tidak mengganti maupun membekukan fase kerja. */
   thinking(): void {
-    this.showing = 'menyusun'
+    this.showing = 'orchestrating'
     this.animate()
   }
 
   /**
-   * Menandai pekerjaan nyata. Berpindah antara menelaah dan menerapkan
-   * membekukan fase sebelumnya; kembali ke fase yang sama melanjutkannya,
-   * sehingga penelaahan yang terpotong oleh proses berpikir tetap satu baris.
+   * Menandai pekerjaan nyata. Berpindah antara exploring dan applying membekukan
+   * fase sebelumnya; kembali ke fase yang sama melanjutkannya, sehingga
+   * penelaahan yang terpotong oleh proses berpikir tetap satu baris.
    */
   work(phase: Phase, detail: string): void {
     if (this.phase && this.phase !== phase) this.commit()
@@ -78,11 +80,12 @@ export class StatusLine {
   update(detail: string): void {
     if (!this.phase) return
     this.detail = detail
-    if (this.showing !== 'menyusun') this.draw()
+    if (this.showing !== 'orchestrating') this.draw()
   }
 
   /** Membekukan fase kerja berjalan menjadi baris ringkasan permanen. */
   commit(): void {
+    this.typing = false
     if (!this.phase) {
       this.clear()
       return
@@ -97,14 +100,44 @@ export class StatusLine {
     stdout.write(`  ${theme.accent('●')} ${theme.bold(label)}${detail}  ${theme.muted(duration)}\n`)
   }
 
+  /**
+   * Membekukan animasi karena pengguna mulai mengetik.
+   *
+   * Spinner dan ketikan berbagi baris yang sama: tanpa ini, setiap frame akan
+   * menimpa huruf yang sedang diketik. Baris dikosongkan agar readline memiliki
+   * barisnya sendiri, dan penggambaran berhenti sampai ketikan dikirim.
+   *
+   * Mengembalikan true hanya pada penekanan pertama, supaya pemanggil dapat
+   * meminta readline menggambar ulang barisnya sekali saja — huruf pertama
+   * terlanjur tergema di baris spinner sebelum baris itu dibersihkan.
+   */
+  pause(): boolean {
+    if (this.typing) return false
+    this.typing = true
+    this.stop()
+    return true
+  }
+
+  /**
+   * Mencetak catatan sekali jalan tanpa mengganggu fase yang sedang berjalan.
+   * Baris hidup dihapus, catatan dicetak, lalu baris hidup digambar ulang.
+   */
+  note(text: string): void {
+    this.typing = false
+    this.stop()
+    stdout.write(`${text}\n`)
+    this.animate()
+  }
+
   /** Membuang baris hidup tanpa membekukan apa pun. */
   clear(): void {
+    this.typing = false
     this.stop()
     this.showing = null
   }
 
   private animate(): void {
-    if (!this.interactive) return
+    if (!this.interactive || this.typing) return
     this.draw()
     this.timer ??= setInterval(() => {
       this.frame = (this.frame + 1) % FRAMES.length
@@ -113,9 +146,9 @@ export class StatusLine {
   }
 
   private draw(): void {
-    if (!this.interactive || !this.showing) return
+    if (!this.interactive || this.typing || !this.showing) return
     const label = PHASE_LABEL[this.showing].padEnd(LABEL_WIDTH)
-    const detail = this.showing === 'menyusun' ? '' : this.detail
+    const detail = this.showing === 'orchestrating' ? '' : this.detail
     stdout.write(`${CLEAR_LINE}  ${theme.accent(FRAMES[this.frame])} ${theme.bold(label)}${theme.muted(detail)}`)
     this.live = true
   }
@@ -165,25 +198,25 @@ export class PhaseTally {
     }
   }
 
-  /** Ringkasan fase menelaah, misalnya "3 berkas, 5 direktori". */
+  /** Ringkasan fase exploring, misalnya "3 files, 5 directories". */
   exploring(): string {
     const parts: string[] = []
-    if (this.filesRead) parts.push(`${this.filesRead} berkas`)
-    if (this.dirsListed) parts.push(`${this.dirsListed} direktori`)
-    return parts.join(', ') || 'menelusuri'
+    if (this.filesRead) parts.push(`${this.filesRead} file${this.filesRead > 1 ? 's' : ''}`)
+    if (this.dirsListed) parts.push(`${this.dirsListed} director${this.dirsListed > 1 ? 'ies' : 'y'}`)
+    return parts.join(', ') || 'scanning'
   }
 
-  /** Ringkasan fase menerapkan, misalnya "hitung.js, app.ts · 2 perintah". */
+  /** Ringkasan fase applying, misalnya "hitung.js, app.ts · 2 commands". */
   applying(): string {
     const parts: string[] = []
     if (this.changed.length) parts.push(this.changed.join(', '))
-    if (this.commands) parts.push(`${this.commands} perintah`)
-    if (this.failures) parts.push(`${this.failures} gagal`)
-    return parts.join(' · ') || 'menerapkan'
+    if (this.commands) parts.push(`${this.commands} command${this.commands > 1 ? 's' : ''}`)
+    if (this.failures) parts.push(`${this.failures} failed`)
+    return parts.join(' · ') || 'applying'
   }
 }
 
 /** Menentukan fase dari nama tool. */
 export function phaseOf(tool: string): Phase {
-  return tool === 'read_file' || tool === 'list_dir' ? 'menelaah' : 'menerapkan'
+  return tool === 'read_file' || tool === 'list_dir' ? 'exploring' : 'applying'
 }

@@ -21,8 +21,13 @@ const VERBOSE = process.argv.includes('--verbose') || process.argv.includes('-v'
 
 const HELP = `  /model          pilih model dengan tombol panah
   /model <id>     ganti langsung, misal /model cx/gpt-5.5
+  /queue          lihat permintaan yang mengantre
+  /queue hapus    kosongkan antrean
   /help           tampilkan bantuan ini
-  /keluar         akhiri sesi`
+  /keluar         akhiri sesi
+
+Mengetik selagi Boo bekerja tidak memotong pekerjaannya; permintaan
+itu masuk antrean dan dijalankan setelah yang sekarang selesai.`
 
 /** Membaca --model dari argumen baris perintah. */
 function modelFromArgs(): string | undefined {
@@ -88,6 +93,7 @@ async function main() {
   })
 
   const readline = createInterface({ input: stdin, output: stdout })
+  const status = new StatusLine()
 
   /**
    * Antrean baris sendiri, bukan readline.question().
@@ -101,6 +107,47 @@ async function main() {
   const waiting: Array<(line: string | null) => void> = []
   let ended = false
 
+  /**
+   * Antrean permintaan yang diketik selagi Boo masih bekerja.
+   *
+   * Antrean ini sengaja terpisah dari `buffered`. Permintaan izin juga membaca
+   * masukan, dan bila keduanya berbagi satu tumpukan, permintaan yang baru
+   * diketik akan termakan sebagai jawaban "y/N" atas izin yang sedang menunggu.
+   * Ketikan saat sibuk hanya menjadi tugas berikutnya; penanya yang aktif selalu
+   * dilayani lebih dulu.
+   */
+  const pending: string[] = []
+  let busy = false
+
+  /**
+   * Menampilkan atau mengosongkan antrean.
+   *
+   * Dipanggil juga langsung dari penangan 'line' saat Boo sedang bekerja: justru
+   * pada saat itulah perintah ini dibutuhkan, sehingga mengantrekannya hanya
+   * akan menunda jawaban sampai antreannya sudah telanjur habis.
+   */
+  function queueCommand(argument: string): void {
+    if (argument === 'hapus' || argument === 'clear') {
+      const dibuang = pending.length
+      pending.length = 0
+      console.log(`  ${theme.muted(`${dibuang} permintaan dibuang dari antrean`)}\n`)
+      return
+    }
+    if (!pending.length) {
+      console.log(`  ${theme.muted('antrean kosong')}\n`)
+      return
+    }
+    console.log()
+    pending.forEach((item, index) => {
+      console.log(`  ${theme.muted(String(index + 1).padStart(3))}  ${item}`)
+    })
+    console.log()
+  }
+
+  function isQueueCommand(text: string): boolean {
+    return text === '/queue' || text.startsWith('/queue ')
+  }
+
   readline.on('line', (line) => {
     const waiter = waiting.shift()
     if (waiter) {
@@ -108,14 +155,38 @@ async function main() {
       // sehingga prompt akan menempel pada keluaran berikutnya tanpa ini.
       if (!stdout.isTTY) stdout.write(`${line}\n`)
       waiter(line)
-    } else {
-      buffered.push(line)
+      return
     }
+    if (busy) {
+      const text = line.trim()
+      if (!text) return
+      if (isQueueCommand(text)) {
+        status.pause()
+        queueCommand(text.slice('/queue'.length).trim())
+        status.note('')
+        return
+      }
+      pending.push(text)
+      status.note(`  ${theme.muted(`antre #${pending.length}  ${text}`)}`)
+      return
+    }
+    buffered.push(line)
   })
   readline.on('close', () => {
     ended = true
     while (waiting.length) waiting.shift()?.(null)
   })
+
+  // Spinner dan ketikan berbagi satu baris. Begitu pengguna menekan tombol saat
+  // Boo bekerja, animasi dihentikan agar readline memiliki barisnya sendiri.
+  if (stdin.isTTY) {
+    stdin.on('keypress', () => {
+      if (!busy) return
+      // Menggambar ulang sekali memulihkan huruf pertama, yang tergema ke baris
+      // spinner sebelum baris itu sempat dibersihkan.
+      if (status.pause()) readline.prompt(true)
+    })
+  }
 
   function ask(prompt: string): Promise<string | null> {
     const queued = buffered.shift()
@@ -130,8 +201,6 @@ async function main() {
     readline.prompt()
     return new Promise((resolve) => waiting.push(resolve))
   }
-
-  const status = new StatusLine()
 
   const agent = new Agent({
     provider,
@@ -217,10 +286,21 @@ async function main() {
   console.log(`  ${theme.muted('ketik perintah, /help untuk daftar perintah')}\n`)
 
   for (;;) {
-    const answer = await ask(`${theme.accentBold('boo')} ${theme.accent('›')} `)
-    if (answer === null) break
-    const input = answer.trim()
-    if (!input) continue
+    const promptText = `${theme.accentBold('boo')} ${theme.accent('›')} `
+    let input: string
+
+    // Permintaan yang sudah mengantre dikerjakan lebih dulu, berurutan.
+    const queued = pending.shift()
+    if (queued !== undefined) {
+      const sisa = pending.length ? theme.muted(`  (${pending.length} lagi mengantre)`) : ''
+      stdout.write(`${promptText}${queued}${sisa}\n`)
+      input = queued
+    } else {
+      const answer = await ask(promptText)
+      if (answer === null) break
+      input = answer.trim()
+      if (!input) continue
+    }
     if (input === '/keluar' || input === '/exit') break
     if (input === '/help') {
       console.log(`\n${HELP}\n`)
@@ -230,82 +310,93 @@ async function main() {
       await changeModel(input.slice('/model'.length).trim())
       continue
     }
-
-    const tally = new PhaseTally()
-    tally.reset()
-    // Keterangan tool dicatat saat mulai; event tool-end hanya membawa nama.
-    const previews = new Map<string, string>()
-    let streamingText = false
-
-    // Model sudah dipanggil tetapi belum membalas apa pun.
-    status.thinking()
-
-    for await (const event of agent.send(input)) {
-      switch (event.type) {
-        case 'text':
-          if (!streamingText) {
-            status.commit()
-            stdout.write('\n  ')
-            streamingText = true
-          }
-          stdout.write(event.delta.replace(/\n/g, '\n  '))
-          break
-
-        case 'tool-start': {
-          if (streamingText) {
-            stdout.write('\n')
-            streamingText = false
-          }
-          previews.set(event.callId, event.preview)
-          const phase = phaseOf(event.name)
-          status.work(phase, event.preview)
-          break
-        }
-
-        case 'tool-end': {
-          tally.record(event.name, event.isError, targetOf(previews.get(event.callId) ?? ''))
-          const phase = phaseOf(event.name)
-          status.update(phase === 'menelaah' ? tally.exploring() : tally.applying())
-          // Kegagalan tidak boleh disembunyikan di balik ringkasan.
-          if (event.isError) {
-            status.commit()
-            console.log(`  ${theme.danger('gagal')} ${theme.bold(event.name)}\n${summarize(event.content, 4)}`)
-          } else if (VERBOSE) {
-            status.commit()
-            console.log(summarize(event.content))
-          }
-          break
-        }
-
-        case 'tool-denied':
-          status.clear()
-          console.log(`  ${theme.muted(`${event.name} dilewati`)}`)
-          break
-
-        case 'turn-end':
-          // Giliran berikutnya dimulai dengan model berpikir lagi.
-          if (event.message.tool_calls?.length) status.thinking()
-          break
-
-        case 'context-trimmed':
-          status.clear()
-          console.log(`  ${theme.muted(`konteks dipangkas: ${event.droppedMessages} pesan lama dibuang (~${event.estimatedTokens} token terkirim)`)}`)
-          break
-
-        case 'error':
-          status.clear()
-          if (streamingText) {
-            stdout.write('\n')
-            streamingText = false
-          }
-          console.log(`\n  ${theme.danger('error')} ${event.message}`)
-          break
-
-        default:
-          break
-      }
+    if (isQueueCommand(input)) {
+      queueCommand(input.slice('/queue'.length).trim())
+      continue
     }
-    status.commit()
+
+    busy = true
+    try {
+      const tally = new PhaseTally()
+      tally.reset()
+      // Keterangan tool dicatat saat mulai; event tool-end hanya membawa nama.
+      const previews = new Map<string, string>()
+      let streamingText = false
+
+      // Model sudah dipanggil tetapi belum membalas apa pun.
+      status.thinking()
+
+      for await (const event of agent.send(input)) {
+        switch (event.type) {
+          case 'text':
+            if (!streamingText) {
+              status.commit()
+              stdout.write('\n  ')
+              streamingText = true
+            }
+            stdout.write(event.delta.replace(/\n/g, '\n  '))
+            break
+
+          case 'tool-start': {
+            if (streamingText) {
+              stdout.write('\n')
+              streamingText = false
+            }
+            previews.set(event.callId, event.preview)
+            const phase = phaseOf(event.name)
+            status.work(phase, event.preview)
+            break
+          }
+
+          case 'tool-end': {
+            tally.record(event.name, event.isError, targetOf(previews.get(event.callId) ?? ''))
+            const phase = phaseOf(event.name)
+            status.update(phase === 'exploring' ? tally.exploring() : tally.applying())
+            // Kegagalan tidak boleh disembunyikan di balik ringkasan.
+            if (event.isError) {
+              status.commit()
+              console.log(`  ${theme.danger('gagal')} ${theme.bold(event.name)}\n${summarize(event.content, 4)}`)
+            } else if (VERBOSE) {
+              status.commit()
+              console.log(summarize(event.content))
+            }
+            break
+          }
+
+          case 'tool-denied':
+            status.clear()
+            console.log(`  ${theme.muted(`${event.name} dilewati`)}`)
+            break
+
+          case 'turn-end':
+            // Giliran berikutnya dimulai dengan model berpikir lagi.
+            if (event.message.tool_calls?.length) status.thinking()
+            break
+
+          case 'context-trimmed':
+            status.clear()
+            console.log(`  ${theme.muted(`konteks dipangkas: ${event.droppedMessages} pesan lama dibuang (~${event.estimatedTokens} token terkirim)`)}`)
+            break
+
+          case 'error':
+            status.clear()
+            if (streamingText) {
+              stdout.write('\n')
+              streamingText = false
+            }
+            console.log(`\n  ${theme.danger('error')} ${event.message}`)
+            break
+
+          default:
+            break
+        }
+      }
+      status.commit()
+    } finally {
+      // Sibuk harus selalu dilepas; bila tersangkut, seluruh ketikan
+      // berikutnya akan masuk antrean dan sesi tampak membeku.
+      busy = false
+    }
     stdout.write('\n\n')
   }
 

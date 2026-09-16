@@ -20,8 +20,33 @@ menyentuh apa pun di luarnya.
 |---|---|
 | `/model` | pilih model dengan tombol panah |
 | `/model <id>` | ganti langsung, misal `/model cx/gpt-5.5` |
+| `/queue` | lihat permintaan yang mengantre |
+| `/queue hapus` | kosongkan antrean |
 | `/help` | daftar perintah |
 | `/keluar` | akhiri sesi |
+
+### Antrean permintaan
+
+Mengetik selagi Boo bekerja tidak memotong pekerjaannya. Permintaan masuk antrean
+dan dijalankan berurutan setelah yang sekarang selesai:
+
+```
+boo > apa isi a.txt?
+  antre #1  lalu perbaiki bug di parser
+  antre #2  jalankan test
+  * Exploring     1 file  1.4s
+  ...
+boo > lalu perbaiki bug di parser  (1 lagi mengantre)
+```
+
+Antrean ini terpisah dari masukan permintaan izin. Bila keduanya berbagi satu
+tumpukan, permintaan yang baru diketik akan termakan sebagai jawaban `y/N` atas
+izin yang sedang menunggu. Penanya yang sedang aktif selalu dilayani lebih dulu;
+ketikan saat sibuk hanya menjadi tugas berikutnya.
+
+`/queue` tetap dijalankan seketika walau Boo sedang bekerja — justru pada saat
+itulah ia dibutuhkan. Spinner juga berhenti begitu kamu mulai mengetik, supaya
+animasinya tidak menimpa huruf yang sedang diketik.
 
 Pada `/model`, gunakan **panah atas/bawah** (atau `j`/`k`) untuk menelusuri,
 **enter** untuk memakai, **esc** untuk membatalkan. Daftar yang lebih panjang
@@ -65,9 +90,9 @@ mencerminkan apa yang benar-benar dikerjakan agent:
 
 | Fase | Kapan | Tool |
 |---|---|---|
-| **Menyusun** | model berpikir dan memutuskan langkah | — |
-| **Menelaah** | mengumpulkan konteks | `read_file`, `list_dir` |
-| **Menerapkan** | mengubah sesuatu | `write_file`, `edit_file`, `bash` |
+| **Orchestrating** | model berpikir dan memutuskan langkah | — |
+| **Exploring** | mengumpulkan konteks | `read_file`, `list_dir` |
+| **Applying** | mengubah sesuatu | `write_file`, `edit_file`, `bash` |
 
 Fase yang berjalan tampil sebagai satu baris hidup dengan spinner, lalu dibekukan
 menjadi ringkasan saat selesai:
@@ -75,13 +100,14 @@ menjadi ringkasan saat selesai:
 ```
 boo > Buat bagi() melempar Error kalau pembagi nol, lalu uji.
 
-  * Menelaah     1 berkas, 1 direktori  3.2s
-  * Menerapkan   hitung.js . 1 perintah  6.0s
+  * Exploring     1 file, 1 directory  3.2s
+  * Applying      hitung.js . 1 command  6.0s
 ```
 
-**Menyusun tidak pernah dibekukan.** Model berpikir di antara setiap pemanggilan
-tool, sehingga membekukannya akan memenuhi layar dengan baris yang sama berulang.
-Penelaahan yang terpotong oleh proses berpikir tetap menyatu dalam satu baris.
+**Orchestrating tidak pernah dibekukan.** Model berpikir di antara setiap
+pemanggilan tool, sehingga membekukannya akan memenuhi layar dengan baris yang
+sama berulang. Penelaahan yang terpotong oleh proses berpikir tetap menyatu dalam
+satu baris.
 
 Kegagalan tool tidak pernah disembunyikan di balik ringkasan. Untuk melihat
 keluaran tool selengkapnya, jalankan dengan `--verbose`.
