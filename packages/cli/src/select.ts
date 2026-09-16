@@ -1,6 +1,9 @@
 /**
  * Pemilih daftar dengan tombol panah.
  *
+ * Setelah pilihan dibuat atau dibatalkan, daftar dihapus dari layar sehingga
+ * riwayat terminal hanya memuat hasilnya.
+ *
  * Daftar yang tampil bernomor mengundang pengguna menekan panah, jadi panah
  * harus benar-benar bekerja. Selama pemilihan berlangsung, stdin dipindahkan ke
  * raw mode agar setiap penekanan tombol terbaca satu per satu; readline utama
@@ -79,7 +82,9 @@ export function select(
       if (painted) stdout.write(`\u001b[${painted}A${CLEAR_BELOW}`)
 
       const start = windowStart(cursor, size, items.length)
-      const lines: string[] = title ? [`  ${theme.bold(title)}`] : []
+      // Baris kosong pembatas ikut dihitung sebagai bagian pemilih supaya ikut
+      // terhapus saat pemilih ditutup.
+      const lines: string[] = title ? ['', `  ${theme.bold(title)}`] : ['']
       for (let index = start; index < start + size; index += 1) {
         const item = items[index]
         const selected = index === cursor
@@ -100,7 +105,13 @@ export function select(
       stdin.off('keypress', onKeypress)
       stdin.off('end', onEnd)
       for (const listener of borrowed) stdin.on('keypress', listener)
-      stdin.setRawMode(false)
+      // Pemilih menghapus dirinya sendiri; yang tersisa di layar hanya hasil
+      // pilihan yang dicetak pemanggil, bukan seluruh daftar.
+      if (painted) stdout.write(`\u001b[${painted}A${CLEAR_BELOW}`)
+      // Kembalikan ke keadaan semula, bukan dimatikan: readline sendiri berjalan
+      // dalam raw mode. Mematikannya membuat terminal ikut menggemakan ketikan,
+      // sehingga setiap baris yang diketik sesudah memakai pemilih tampil dua kali.
+      stdin.setRawMode(wasRaw)
       stdout.write(CURSOR_SHOW)
       readline.resume()
       resolve(value)
@@ -146,6 +157,7 @@ export function select(
     // terbuka kembali dan ketikan berikutnya jatuh ke dalamnya. Pendengar lain
     // dipinjam selama pemilihan lalu dikembalikan persis seperti semula.
     const borrowed = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
+    const wasRaw = stdin.isRaw
     stdin.removeAllListeners('keypress')
 
     stdin.setRawMode(true)

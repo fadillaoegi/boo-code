@@ -338,7 +338,6 @@ async function main() {
     activeIndex: number,
     initialIndex = activeIndex,
   ): Promise<number | null> {
-    console.log()
     const picked = await select(readline, {
       title,
       items: labels,
@@ -349,7 +348,7 @@ async function main() {
     })
     if (picked !== undefined) return picked
 
-    console.log(`  ${theme.bold(title)}`)
+    console.log(`\n  ${theme.bold(title)}`)
     labels.forEach((label, index) => {
       const active = index === activeIndex ? theme.muted(' (aktif)') : ''
       console.log(`  ${theme.muted(String(index + 1).padStart(3))}  ${label}${active}`)

@@ -152,6 +152,14 @@ langkah — pilih keluarga, lalu pilih tingkat penalaran:
 Langkah kedua dilewati untuk keluarga yang hanya punya satu varian, termasuk
 kedua model Claude. Model lainnya tetap tersedia di bawah **Model lain…**.
 
+Setelah memilih atau membatalkan, daftar dihapus dari layar sehingga riwayat
+terminal hanya memuat hasilnya:
+
+```
+> /model
+  model GPT-5.6 Sol · Extra High
+```
+
 Tingkat penalaran disampaikan lewat dua mekanisme yang berbeda:
 
 | Keluarga | Tingkat berada di | Pilihan |
