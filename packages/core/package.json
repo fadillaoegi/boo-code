@@ -1,0 +1,10 @@
+{
+  "name": "@boo/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./design/tokens.ts": "./src/design/tokens.ts"
+  }
+}

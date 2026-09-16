@@ -1,0 +1,12 @@
+{
+  "name": "@fldev/boo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "boo": "./src/index.ts"
+  },
+  "dependencies": {
+    "@boo/core": "workspace:*"
+  }
+}
