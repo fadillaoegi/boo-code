@@ -15,7 +15,6 @@ import {
   createDefaultRegistry,
   describeSelection,
   diffStats,
-  effortLabel,
   findSelection,
   groupModels,
   NineRouterProvider,
@@ -91,6 +90,15 @@ const HELP = `  /model          pilih model dengan tombol panah
 
 Mengetik selagi Boo bekerja tidak memotong pekerjaannya; permintaan
 itu masuk antrean dan dijalankan setelah yang sekarang selesai.`
+
+/**
+ * Nama model dan tingkat penalaran yang mudah dibaca, misalnya
+ * "GPT-5.6 Sol · Extra High". Diturunkan dari id model saja, tanpa memanggil
+ * 9Router, supaya aman dipakai setiap kali prompt digambar.
+ */
+function modelLabel(model: string, effort: string | undefined): string {
+  return describeSelection(groupModels([model]), model, effort)
+}
 
 /** Membaca nilai bendera seperti --model atau --effort dari argumen baris perintah. */
 function flagValue(name: string, short?: string): string | undefined {
@@ -440,12 +448,13 @@ async function main() {
   }
 
   console.log(`\n${banner()}\n`)
-  const activeModel = reasoningEffort ? `${model} · ${effortLabel(reasoningEffort)}` : model
-  console.log(`  ${theme.accent('Boo Code')} ${theme.muted(`· ${activeModel} · ${workspace}`)}`)
+  console.log(`  ${theme.accent('Boo Code')} ${theme.muted(`· ${modelLabel(model, reasoningEffort)} · ${workspace}`)}`)
   console.log(`  ${theme.muted('ketik perintah, /help untuk daftar perintah')}\n`)
 
   for (;;) {
-    const promptText = `${theme.accentBold('boo')} ${theme.accent('›')} `
+    // Dibangun ulang setiap putaran agar selalu mencerminkan model yang sedang
+    // dipakai, termasuk sesaat setelah /model mengubahnya.
+    const promptText = `${theme.accentBold('boo')} ${theme.muted(`· ${modelLabel(provider.model, provider.reasoningEffort)}`)} ${theme.accent('›')} `
     let input: string
 
     // Permintaan yang sudah mengantre dikerjakan lebih dulu, berurutan.

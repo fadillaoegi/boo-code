@@ -94,6 +94,13 @@ test('pilihan aktif ditemukan kembali, termasuk tingkat parameter', () => {
   assert.equal(describeSelection(groupModels(['ag/gemini-3.7-flash-high']), 'ag/gemini-3.7-flash-high'), 'Gemini 3.7 Flash · High')
 })
 
+test('model bertingkat parameter tanpa tingkat tetap tampil dengan nama keluarga', () => {
+  assert.equal(describeSelection(groupModels(['cx/gpt-5.6-sol']), 'cx/gpt-5.6-sol'), 'GPT-5.6 Sol')
+  assert.equal(describeSelection(groupModels(['cx/gpt-5.6-sol']), 'cx/gpt-5.6-sol', 'xhigh'), 'GPT-5.6 Sol · Extra High')
+  // Model yang sama sekali tidak dikenal tetap tampil apa adanya.
+  assert.equal(describeSelection([], 'vendor/entah'), 'vendor/entah')
+})
+
 test('nama model dirapikan agar mudah dibaca', () => {
   assert.equal(humanizeModel('ag/claude-sonnet-4-6'), 'Claude Sonnet 4.6')
   assert.equal(humanizeModel('cx/gpt-5.5'), 'GPT-5.5')

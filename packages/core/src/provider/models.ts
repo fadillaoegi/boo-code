@@ -158,7 +158,13 @@ export function findSelection(
 /** Label singkat untuk ditampilkan, misalnya "GPT-5.6 Sol · Extra High". */
 export function describeSelection(families: ModelFamily[], modelId: string, reasoningEffort?: string): string {
   const found = findSelection(families, modelId, reasoningEffort)
-  if (!found) return reasoningEffort ? `${modelId} · ${effortLabel(reasoningEffort)}` : modelId
+  if (!found) {
+    // Model dikenal tetapi tanpa tingkat yang cocok — misalnya GPT-5.6 Sol yang
+    // dipakai tanpa reasoning_effort. Nama keluarganya tetap lebih terbaca.
+    const family = families.find((item) => item.options.some((option) => option.modelId === modelId))
+    const name = family?.label ?? modelId
+    return reasoningEffort ? `${name} · ${effortLabel(reasoningEffort)}` : name
+  }
   // Label tingkat ditampilkan setiap kali ada, termasuk untuk keluarga satu varian
   // seperti ag/gemini-3.7-flash-high yang dipilih langsung lewat /model <id>.
   const { family, option } = found

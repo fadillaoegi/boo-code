@@ -73,6 +73,20 @@ aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
 | `--version` | tampilkan versi |
 | `--help` | tampilkan bantuan |
 
+### Prompt
+
+Prompt menampilkan model dan tingkat penalaran yang sedang dipakai, dan ikut
+berubah begitu `/model` menggantinya:
+
+```
+boo · Claude Sonnet 4.6 >
+boo · GPT-5.6 Sol · Extra High >
+boo · Gemini 3.7 Flash · High >
+```
+
+Namanya diturunkan dari id model saja, tanpa memanggil 9Router, sehingga aman
+digambar ulang setiap kali prompt muncul.
+
 ### Perintah di dalam sesi
 
 | Perintah | Fungsi |
