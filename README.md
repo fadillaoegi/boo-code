@@ -416,27 +416,61 @@ lazim saat membaca file raksasa — isinya dipotong, bloknya tidak dibuang.
 | `edit_file` | konfirmasi | minta izin tiap kali |
 | `bash` | konfirmasi | minta izin tiap kali |
 
-Izin ditanyakan dengan menampilkan tindakan utuhnya — perintah shell yang sebenarnya,
-bukan sekadar nama tool. Untuk `write_file` dan `edit_file`, diff perubahan
-ditampilkan lebih dulu:
+Setiap tindakan yang mengubah sesuatu ditanyakan lewat panel yang menyebut
+tindakannya dengan bahasa manusia dan menampilkan isinya:
 
 ```
-    export function bagi(a, b) {
-  +   if (b === 0) {
-  +     throw new Error("Pembagi tidak boleh nol")
-  +   }
-      return a / b
-    }
-    3 baris ditambah, 0 dihapus
+  ╭─ Ubah berkas ──────────────────────────────────────────╮
+  │ catatan.md                                       +1 -1 │
+  │                                                        │
+  │ 3   1. Jeruk nipis adalah buah tropis.                 │
+  │ 4 - 2. Rasanya sangat asam.                            │   <- latar merah
+  │ 4 + 2. Jeruk nipis kaya vitamin C.                     │   <- latar hijau
+  │ 5   3. Kaya vitamin C.                                 │
+  │     ⋮ 2 baris tidak berubah                            │
+  ╰────────────────────────────────────────────────────────╯
 
-  izin edit_file  ubah hitung.js
-  jalankan? [y/N]
+  Terapkan perubahan ke catatan.md?
+ > 1. Ya
+   2. Ya, izinkan semua perubahan berkas di sesi ini
+   3. Tidak, beri tahu Boo apa yang harus dilakukan
 ```
 
-Menyetujui "tulis src/app.ts (40 baris)" berarti menyetujui sesuatu yang tidak
-terlihat; diff membuat persetujuan menjadi keputusan yang berdasar. Core meminta
-izin lewat callback `askPermission`, sehingga web nanti bisa memakai mekanisme
-persetujuan yang berbeda tanpa mengubah core.
+| Tool | Judul panel | Isi panel |
+|---|---|---|
+| `write_file` (berkas baru) | Buat berkas | seluruh isi, bernomor baris |
+| `write_file` (berkas ada) | Tulis ulang berkas | diff terhadap isi lama |
+| `edit_file` | Ubah berkas | diff dengan nomor baris sesungguhnya di berkas |
+| `bash` | Jalankan perintah | perintah selengkapnya |
+
+Diff `edit_file` dihitung atas seluruh berkas, bukan hanya cuplikan yang diganti,
+sehingga nomor barisnya sesuai posisi di berkas dan baris di sekitarnya ikut tampil.
+Kode disorot sesuai ekstensi berkasnya, dan baris yang berubah diberi latar selebar
+panel. **Perintah shell tidak pernah dipotong** — bagian yang tersembunyi bisa saja
+bagian yang berbahaya — jadi perintah panjang dibungkus utuh.
+
+Pilih dengan panah atau angka `1`–`3`; `esc` menolak.
+
+- **Ya** — jalankan sekali ini.
+- **Ya, untuk sisa sesi** — perubahan berkas disetujui sebagai satu kelompok, tetapi
+  perintah shell hanya **per perintah persis**: menyetujui `ls` meloloskan `ls`
+  berikutnya tanpa bertanya, sementara `pwd` tetap ditanyakan. Izin ini hanya berlaku
+  selama proses berjalan dan tidak ikut tersimpan di sesi.
+- **Tidak, beri tahu Boo** — menolak sambil mengetik arahan. Arahan itu diteruskan
+  ke model sebagai hasil tool, sehingga penolakan menjadi petunjuk langkah berikutnya,
+  bukan jalan buntu.
+
+Setelah memilih, panel dihapus dan hanya satu baris keputusan yang tersisa:
+
+```
+  ✓ Buat berkas catatan.md · diizinkan
+  ✗ Ubah berkas catatan.md · ditolak: tulis dengan huruf kapital semua
+  ✓ Jalankan perintah · ls · diizinkan otomatis di sesi ini
+```
+
+Catatan untuk perintah memuat perintahnya sendiri, bukan deskripsi yang ditulis
+model tentang perintah itu. Core meminta izin lewat callback `askPermission`, sehingga
+web nanti dapat memakai mekanisme persetujuan sendiri tanpa mengubah core.
 
 ## File rahasia
 

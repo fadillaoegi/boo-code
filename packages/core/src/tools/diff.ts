@@ -13,6 +13,12 @@ export type DiffLineKind = 'add' | 'remove' | 'context'
 export interface DiffLine {
   kind: DiffLineKind
   text: string
+  /** Nomor baris di teks lama; ada untuk baris konteks dan yang dihapus. */
+  oldNumber?: number
+  /** Nomor baris di teks baru; ada untuk baris konteks dan yang ditambah. */
+  newNumber?: number
+  /** Diisi pada penanda ringkasan: jumlah baris tak berubah yang dilewati. */
+  skipped?: number
 }
 
 /** Di atas ambang ini, biaya LCS tidak sepadan untuk sesuatu yang hanya dibaca sekilas. */
@@ -97,6 +103,20 @@ export function diffLines(beforeText: string, afterText: string): DiffLine[] {
   }
 
   lines.push(...after.slice(after.length - suffix).map((text): DiffLine => ({ kind: 'context', text })))
+  return numberLines(lines)
+}
+
+/**
+ * Memberi nomor baris lama dan baru dalam satu lintasan. Dihitung terpisah dari
+ * penyusunan diff agar setiap cabang di atas tidak perlu melacak posisinya.
+ */
+function numberLines(lines: DiffLine[]): DiffLine[] {
+  let oldNumber = 1
+  let newNumber = 1
+  for (const line of lines) {
+    if (line.kind !== 'add') line.oldNumber = oldNumber++
+    if (line.kind !== 'remove') line.newNumber = newNumber++
+  }
   return lines
 }
 
@@ -118,7 +138,7 @@ export function condense(lines: DiffLine[], context = CONTEXT_LINES): DiffLine[]
   lines.forEach((line, index) => {
     if (keep[index]) {
       if (skipped) {
-        condensed.push({ kind: 'context', text: `… ${skipped} baris tidak berubah …` })
+        condensed.push({ kind: 'context', text: `… ${skipped} baris tidak berubah …`, skipped })
         skipped = 0
       }
       condensed.push(line)
@@ -126,7 +146,7 @@ export function condense(lines: DiffLine[], context = CONTEXT_LINES): DiffLine[]
       skipped += 1
     }
   })
-  if (skipped) condensed.push({ kind: 'context', text: `… ${skipped} baris tidak berubah …` })
+  if (skipped) condensed.push({ kind: 'context', text: `… ${skipped} baris tidak berubah …`, skipped })
   return condensed
 }
 

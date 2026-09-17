@@ -90,3 +90,39 @@ test('edit_file memberi pratinjau sebelum berkas disentuh', async () => {
   const { readFile } = await import('node:fs/promises')
   assert.equal(await readFile(join(workspace, 'a.txt'), 'utf8'), 'halo dunia\n')
 })
+
+test('baris diff diberi nomor baris lama dan baru', () => {
+  const lines = diffLines('a\nb\nc', 'a\nB\nc\nd')
+  const pick = (kind: string, text: string) => lines.find((line) => line.kind === kind && line.text === text)
+  assert.deepEqual([pick('context', 'a')?.oldNumber, pick('context', 'a')?.newNumber], [1, 1])
+  assert.equal(pick('remove', 'b')?.oldNumber, 2)
+  assert.equal(pick('remove', 'b')?.newNumber, undefined)
+  assert.equal(pick('add', 'B')?.newNumber, 2)
+  assert.equal(pick('add', 'd')?.newNumber, 4)
+})
+
+test('penanda ringkasan membawa jumlah baris yang dilewati', () => {
+  const before = Array.from({ length: 40 }, (_, i) => `baris ${i}`).join('\n')
+  const marker = condense(diffLines(before, before.replace('baris 20', 'ubah'))).find((line) => line.skipped)
+  assert.ok(marker && marker.skipped! > 0)
+})
+
+test('edit_file menampilkan nomor baris sesungguhnya dan konteks di sekitarnya', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'boo-diff-'))
+  const original = Array.from({ length: 30 }, (_, i) => `baris ${i + 1}`).join('\n')
+  await writeFile(join(workspace, 'a.txt'), original, 'utf8')
+
+  const detail = await editFileTool.detail!({ path: 'a.txt', old_text: 'baris 20', new_text: 'baris dua puluh' }, { workspace })
+
+  assert.ok(detail)
+  assert.equal(detail.find((line) => line.kind === 'remove')?.oldNumber, 20)
+  assert.equal(detail.find((line) => line.kind === 'add')?.newNumber, 20)
+  assert.ok(detail.some((line) => line.kind === 'context' && line.text === 'baris 19'), 'konteks sebelum perubahan')
+  assert.ok(detail.some((line) => line.skipped), 'baris jauh diringkas')
+})
+
+test('write_file untuk berkas baru bernomor tanpa baris kosong ekstra di akhir', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'boo-diff-'))
+  const detail = await writeFileTool.detail!({ path: 'baru.md', content: '# Judul\nisi\n' }, { workspace })
+  assert.deepEqual(detail?.map((line) => [line.newNumber, line.text]), [[1, '# Judul'], [2, 'isi']])
+})

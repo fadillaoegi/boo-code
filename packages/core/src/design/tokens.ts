@@ -46,6 +46,9 @@ export const fixedColor = {
   /** Baris yang ditambah dan dihapus pada pratinjau diff. */
   added: '#4ade80',
   removed: '#f87171',
+  /** Latar baris diff; cukup gelap agar syntax highlighting tetap terbaca di atasnya. */
+  addedBackground: '#10301c',
+  removedBackground: '#3b1519',
   dangerStrong: '#dc2626',
   /** Shadow di atas permukaan gelap (bubble user, tombol hitam). */
   shadowInverse: '#a3a3a3',

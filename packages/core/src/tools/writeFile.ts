@@ -33,7 +33,10 @@ export const writeFileTool: Tool<Args> = {
     try {
       existing = await readFile(target, 'utf8')
     } catch {
-      return args.content.split('\n').map((text) => ({ kind: 'add', text }))
+      const lines = diffLines('', args.content)
+      // Baris baru di akhir isi bukan baris tersendiri; jangan tampilkan baris kosong ekstra.
+      if (args.content.endsWith('\n') && lines.at(-1)?.text === '') lines.pop()
+      return lines
     }
     if (existing === args.content) return null
     return condense(diffLines(existing, args.content))

@@ -9,7 +9,7 @@
 
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import {
   Agent,
   createDefaultRegistry,
@@ -18,12 +18,13 @@ import {
   findSelection,
   groupModels,
   NineRouterProvider,
-  type DiffLine,
+  resolveInWorkspace,
   type Message,
   type ModelFamily,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
 import { describeArgs, ToolCallProgress, toolActivity, turnActivity } from './activity.ts'
+import { commandBody, describeRequest, diffBody, renderPanel } from './approval.ts'
 import { MarkdownRenderer } from './markdown.ts'
 import { select } from './select.ts'
 import {
@@ -265,25 +266,6 @@ function requireKey(key: string | undefined): string {
  */
 function targetOf(preview: string): string {
   return preview.split(/\s+/)[1] ?? ''
-}
-
-/** Jumlah baris diff yang ditampilkan sebelum sisanya diringkas. */
-const MAX_DIFF_PREVIEW_LINES = 40
-
-/** Menggambar diff berwarna: hijau untuk tambahan, merah untuk penghapusan. */
-function renderDiff(detail: DiffLine[]): string {
-  const { added, removed } = diffStats(detail)
-  const shown = detail.slice(0, MAX_DIFF_PREVIEW_LINES)
-  const body = shown.map((line) => {
-    if (line.kind === 'add') return theme.added(`    + ${line.text}`)
-    if (line.kind === 'remove') return theme.removed(`    - ${line.text}`)
-    return theme.muted(`      ${line.text}`)
-  })
-  if (detail.length > shown.length) {
-    body.push(theme.muted(`    … ${detail.length - shown.length} baris diff lagi`))
-  }
-  const summary = theme.muted(`    ${added} baris ditambah, ${removed} dihapus`)
-  return `${body.join('\n')}\n${summary}`
 }
 
 /** Memangkas keluaran tool agar terminal tidak tenggelam oleh isi file. */
@@ -537,6 +519,22 @@ async function main() {
     return new Promise((resolve) => waiting.push(resolve))
   }
 
+  const ESC = String.fromCharCode(27)
+  /**
+   * Izin yang diberikan untuk sisa sesi lewat pilihan kedua panel. Perubahan berkas
+   * disetujui sebagai satu kelompok, tetapi perintah shell hanya per perintah persis:
+   * menyetujui `pnpm test` tidak boleh ikut meloloskan perintah lain.
+   */
+  const sessionApprovals = new Set<string>()
+  function approvalKeyOf(kind: string, tool: string, command: string): string {
+    if (kind === 'edit') return 'edit'
+    if (kind === 'command') return `command:${command}`
+    return `tool:${tool}`
+  }
+  function recordDecision(allowed: boolean, text: string): void {
+    emit(`  ${allowed ? theme.accent('✓') : theme.danger('✗')} ${theme.muted(text)}\n`)
+  }
+
   const agent = new Agent({
     provider,
     registry: createDefaultRegistry(),
@@ -546,19 +544,85 @@ async function main() {
     ...(config.BOO_MAX_CONTEXT_TOKENS
       ? { maxContextTokens: Number(config.BOO_MAX_CONTEXT_TOKENS) }
       : {}),
-    async askPermission({ preview, name, detail }) {
-      // Baris status hidup harus dibuang dulu; spinner akan menimpa prompt izin.
+    async askPermission({ name, args, detail }) {
+      // Baris status hidup harus dibuang dulu; spinner akan menimpa panel izin.
       stopTyping(true)
       status.clear()
       if (midLine) emit('\n')
-      if (detail?.length) console.log(`\n${renderDiff(detail)}`)
-      // Pertanyaan izin sengaja memuat perintah utuh: pengguna menyetujui
-      // tindakan yang terlihat, bukan nama tool yang abstrak.
-      const answer = await ask(
-        `\n  ${theme.danger('izin')} ${theme.bold(name)}  ${preview}\n  ${theme.muted('jalankan? [y/N] ')}`,
-      )
-      // null berarti stdin tertutup; perlakukan sebagai tidak diizinkan.
-      return answer?.trim().toLowerCase() === 'y'
+
+      let fileExists: boolean
+      try {
+        fileExists = typeof args.path === 'string' && existsSync(resolveInWorkspace(workspace, args.path))
+      } catch {
+        // Path di luar workspace: tool akan menolaknya; anggap berkas baru.
+        fileExists = false
+      }
+      const request = describeRequest(name, args, fileExists)
+      const command = typeof args.command === 'string' ? args.command : ''
+      const approvalKey = approvalKeyOf(request.kind, name, command)
+      // Catatan keputusan memuat apa yang benar-benar disetujui: perintahnya, bukan
+      // deskripsi yang ditulis model tentang perintah itu.
+      const summary = request.kind === 'command'
+        ? `${request.title} · ${command}`
+        : request.subject ? `${request.title} ${request.subject}` : request.title
+
+      if (sessionApprovals.has(approvalKey)) {
+        recordDecision(true, `${summary} · diizinkan otomatis di sesi ini`)
+        return true
+      }
+
+      const columns = stdout.columns || 80
+      const rows = stdout.rows || 24
+      const width = Math.max(40, Math.min(columns - 2, 100))
+      // Pertanyaan dan pilihan memakai sekitar sepuluh baris; sisanya untuk isi panel.
+      const bodyLimit = Math.max(6, rows - 16)
+      const body = request.kind === 'command'
+        ? commandBody(command, width - 4)
+        : detail?.length ? diffBody(detail, request.subject, width - 4, bodyLimit) : []
+      const panel = renderPanel(request, body, width, detail?.length ? diffStats(detail) : undefined)
+      emit(`\n${panel.join('\n')}\n`)
+      const panelHeight = panel.length + 1
+
+      const choice = await select(readline, {
+        title: request.question,
+        items: ['Ya', request.allowAlways, 'Tidak, beri tahu Boo apa yang harus dilakukan'],
+        initialIndex: 0,
+        numbered: true,
+        hint: 'panah memilih · enter memakai · 1-3 pintasan · esc menolak',
+      })
+
+      if (choice === undefined) {
+        // Terminal tanpa raw mode: panel tetap tampil dan jawabannya diketik.
+        const answer = await ask(`  ${request.question} [y/N] `)
+        const allowed = answer?.trim().toLowerCase() === 'y'
+        recordDecision(allowed, `${summary} · ${allowed ? 'diizinkan' : 'ditolak'}`)
+        return allowed
+      }
+
+      // Pemilih sudah menghapus dirinya; panel ikut dihapus sehingga riwayat
+      // terminal hanya memuat satu baris keputusan. Panel yang lebih tinggi dari
+      // layar tidak terjangkau kursor, jadi dibiarkan daripada terhapus sebagian.
+      if (panelHeight < rows) stdout.write(`${ESC}[${panelHeight}A${ESC}[0J`)
+
+      if (choice === 0) {
+        recordDecision(true, `${summary} · diizinkan`)
+        return true
+      }
+      if (choice === 1) {
+        sessionApprovals.add(approvalKey)
+        const scope = request.kind === 'edit' ? 'semua perubahan berkas' : request.kind === 'command' ? 'perintah ini' : name
+        recordDecision(true, `${summary} · ${scope} diizinkan untuk sisa sesi`)
+        return true
+      }
+      if (choice === 2) {
+        const feedback = (await ask(`  ${theme.accent('✎')} ${theme.bold('Arahan untuk Boo:')} `))?.trim() ?? ''
+        // Baris ketik arahan dihapus; isinya tercatat di baris keputusan.
+        stdout.write(`${ESC}[1A${ESC}[2K`)
+        recordDecision(false, feedback ? `${summary} · ditolak: ${feedback}` : `${summary} · ditolak`)
+        return { allowed: false, ...(feedback ? { feedback } : {}) }
+      }
+      recordDecision(false, `${summary} · ditolak`)
+      return { allowed: false }
     },
   })
 
@@ -810,6 +874,9 @@ async function main() {
             const key = `${event.index}|${label}|${detail}`
             if (key !== lastToolActivity) {
               lastToolActivity = key
+              // Hitungan ringkasan dimulai ulang untuk setiap fase baru; tanpa ini
+              // fase kedua ikut menghitung pekerjaan fase sebelumnya.
+              if (status.currentPhase !== phaseOf(event.name)) tally.reset()
               status.work(phaseOf(event.name), label, detail)
             }
             break
@@ -835,6 +902,7 @@ async function main() {
           case 'tool-start': {
             finishAnswer()
             previews.set(event.callId, event.preview)
+            if (status.currentPhase !== phaseOf(event.name)) tally.reset()
             status.work(phaseOf(event.name), toolActivity(event.name), describeArgs(event.name, event.args))
             break
           }
@@ -855,8 +923,10 @@ async function main() {
           }
 
           case 'tool-denied':
+            // Keputusannya sudah dicatat oleh panel izin. Fase yang dibuka hanya untuk
+            // tool yang ditolak ini dibuang agar tidak membeku sebagai ringkasan kosong.
+            status.discardEmpty()
             status.clear()
-            emit(`  ${theme.muted(`${event.name} dilewati`)}\n`)
             break
 
           case 'turn-end':

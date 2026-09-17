@@ -16,6 +16,11 @@ function fg(hex: string): string {
   return `\x1b[38;2;${r};${g};${b}m`
 }
 
+/** Warna latar 24-bit dari hex token. */
+function bg(hex: string): string {
+  return fg(hex).replace('[38;', '[48;')
+}
+
 const RESET = '\x1b[0m'
 const BOLD = '\x1b[1m'
 const DIM = '\x1b[2m'
@@ -29,6 +34,8 @@ export interface TextStyle {
   strike?: boolean
   /** Warna depan dalam hex token. */
   color?: string
+  /** Warna latar dalam hex token. */
+  background?: string
 }
 
 /**
@@ -47,6 +54,7 @@ export function sgr(style: TextStyle): string {
   if (style.strike) codes.push('9')
   let sequence = `\x1b[${codes.join(';')}m`
   if (style.color) sequence += fg(style.color)
+  if (style.background) sequence += bg(style.background)
   return sequence
 }
 

@@ -111,6 +111,23 @@ export class StatusLine {
     this.show(label, detail)
   }
 
+  /** Fase yang sedang berjalan, atau null bila belum ada pekerjaan. */
+  get currentPhase(): Phase | null {
+    return this.phase
+  }
+
+  /**
+   * Membuang fase yang belum menghasilkan apa pun — misalnya tool yang ditolak
+   * sebelum dijalankan — tanpa membekukannya menjadi ringkasan kosong.
+   */
+  discardEmpty(): void {
+    if (!this.phase || this.summary) return
+    this.stop()
+    this.phase = null
+    this.label = null
+    this.detail = ''
+  }
+
   /** Memperbarui ringkasan fase yang akan dibekukan, tanpa mengubah label hidup. */
   update(summary: string): void {
     if (this.phase) this.summary = summary

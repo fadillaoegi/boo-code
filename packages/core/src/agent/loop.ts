@@ -24,19 +24,29 @@ export type AgentEvent =
   | { type: 'tool-call'; index: number; name: string; delta: string }
   | { type: 'tool-start'; name: string; preview: string; callId: string; args: Record<string, unknown> }
   | { type: 'tool-end'; name: string; callId: string; content: string; isError: boolean }
-  | { type: 'tool-denied'; name: string; callId: string }
+  | { type: 'tool-denied'; name: string; callId: string; feedback?: string }
   | { type: 'turn-end'; message: Message }
   | { type: 'context-trimmed'; droppedMessages: number; estimatedTokens: number }
   | { type: 'error'; message: string }
 
 /** Ditanyakan sebelum tool berisiko dijalankan. */
+/**
+ * Keputusan izin. `feedback` diisi bila pengguna menolak sambil memberi arahan;
+ * arahan itu diteruskan ke model sebagai hasil tool, supaya penolakan menjadi
+ * petunjuk langkah berikutnya, bukan jalan buntu.
+ */
+export interface PermissionDecision {
+  allowed: boolean
+  feedback?: string
+}
+
 export type PermissionAsker = (request: {
   name: string
   preview: string
   args: Record<string, unknown>
   /** Diff perubahan bila tool menyediakannya; null berarti tak ada yang berubah. */
   detail: DiffLine[] | null
-}) => Promise<boolean>
+}) => Promise<boolean | PermissionDecision>
 
 export interface AgentOptions {
   provider: NineRouterProvider
@@ -132,10 +142,14 @@ export class Agent {
           } catch {
             detail = null
           }
-          const allowed = await this.options.askPermission({ name: tool.name, preview, args, detail })
-          if (!allowed) {
-            yield { type: 'tool-denied', name: tool.name, callId: call.id }
-            this.pushToolResult(call.id, 'Ditolak oleh pengguna. Jangan ulangi; tanyakan langkah berikutnya.')
+          const answer = await this.options.askPermission({ name: tool.name, preview, args, detail })
+          const decision = typeof answer === 'boolean' ? { allowed: answer } : answer
+          if (!decision.allowed) {
+            const feedback = decision.feedback?.trim()
+            yield { type: 'tool-denied', name: tool.name, callId: call.id, ...(feedback ? { feedback } : {}) }
+            this.pushToolResult(call.id, feedback
+              ? `Ditolak oleh pengguna, dengan arahan: ${feedback}\nIkuti arahan itu; jangan ulangi tindakan yang ditolak tanpa perubahan.`
+              : 'Ditolak oleh pengguna. Jangan ulangi; tanyakan langkah berikutnya.')
             continue
           }
         }

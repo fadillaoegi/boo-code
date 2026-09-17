@@ -36,6 +36,8 @@ export interface SelectOptions {
   /** Ditampilkan di sebelah kanan item yang sedang dipakai. */
   activeLabel?: string
   hint?: string
+  /** Beri nomor pada setiap item dan jadikan tombol angka sebagai pintasan. */
+  numbered?: boolean
 }
 
 const CURSOR_HIDE = '\u001b[?25l'
@@ -66,7 +68,7 @@ function windowStart(cursor: number, size: number, total: number): number {
  */
 export function select(
   readline: ReadlineInterface,
-  { title = '', items, activeIndex = -1, initialIndex, activeLabel = '', hint = '' }: SelectOptions,
+  { title = '', items, activeIndex = -1, initialIndex, activeLabel = '', hint = '', numbered = false }: SelectOptions,
 ): Promise<number | null | undefined> {
   if (!stdin.isTTY || typeof stdin.setRawMode !== 'function' || !items.length) {
     return Promise.resolve(undefined)
@@ -86,7 +88,7 @@ export function select(
       // terhapus saat pemilih ditutup.
       const lines: string[] = title ? ['', `  ${theme.bold(title)}`] : ['']
       for (let index = start; index < start + size; index += 1) {
-        const item = items[index]
+        const item = numbered ? `${index + 1}. ${items[index]}` : items[index]
         const selected = index === cursor
         const marker = selected ? theme.accentBold(' > ') : '   '
         const label = index === activeIndex && activeLabel
@@ -119,6 +121,9 @@ export function select(
 
     const onKeypress = (_: string, key: Key = {}) => {
       if (key.ctrl && key.name === 'c') return finish(null)
+      if (numbered && key.name && /^[1-9]$/.test(key.name) && Number(key.name) <= items.length) {
+        return finish(Number(key.name) - 1)
+      }
       switch (key.name) {
         case 'up':
         case 'k':

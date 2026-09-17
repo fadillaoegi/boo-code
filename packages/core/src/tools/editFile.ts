@@ -27,8 +27,21 @@ export const editFileTool: Tool<Args> = {
     },
   },
   preview: (args) => `ubah ${args.path}`,
-  async detail(args): Promise<DiffLine[] | null> {
+  async detail(args, context): Promise<DiffLine[] | null> {
     if (args.old_text === args.new_text) return null
+    // Diff atas seluruh berkas, bukan hanya cuplikannya, supaya pratinjau memuat
+    // nomor baris sesungguhnya dan baris di sekitarnya — cuplikan sendirian tidak
+    // memberi tahu di mana perubahan itu jatuh.
+    try {
+      if (isSensitivePath(args.path)) throw new Error('rahasia')
+      const original = await readFile(resolveInWorkspace(context.workspace, args.path), 'utf8')
+      if (original.split(args.old_text).length - 1 === 1) {
+        return condense(diffLines(original, original.replace(args.old_text, args.new_text)))
+      }
+    } catch {
+      // Berkas tak terbaca atau cuplikan tidak unik: tool akan menolak saat dijalankan,
+      // tetapi pratinjau cuplikan tetap berguna untuk keputusan izin.
+    }
     return condense(diffLines(args.old_text, args.new_text))
   },
   async run(args, context) {

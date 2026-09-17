@@ -265,6 +265,7 @@ export function parseInline(text: string, base: TextStyle = STYLE.plain): Styled
 function sameStyle(a: TextStyle, b: TextStyle): boolean {
   return a.bold === b.bold && a.dim === b.dim && a.italic === b.italic
     && a.underline === b.underline && a.strike === b.strike && a.color === b.color
+    && a.background === b.background
 }
 
 function copyRuns(runs: StyledRun[]): StyledRun[] {
@@ -374,6 +375,7 @@ function wrapCharacters(runs: StyledRun[], width: number, prefix: StyledRun[]): 
 
 function isPlain(style: TextStyle): boolean {
   return !style.bold && !style.dim && !style.italic && !style.underline && !style.strike && !style.color
+    && !style.background
 }
 
 /** Menyusun satu baris bergaya menjadi teks ANSI, selalu diakhiri reset. */
