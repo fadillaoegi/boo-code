@@ -84,18 +84,24 @@ function version(): string {
   }
 }
 
-const USAGE = `boo — coding agent oleh FLdev
+/**
+ * Nama perintah yang ditampilkan di setiap petunjuk. `boo` tetap dapat dipakai,
+ * tetapi petunjuk selalu menyebut satu nama resmi agar mudah disalin apa adanya.
+ */
+const COMMAND = 'boo-code'
 
-  boo                      mulai sesi di direktori saat ini
-  boo <id>                 langsung buka sesi tertentu, misal: boo 5bd73640
-  boo --resume             pilih sesi dari daftar
-  boo --resume <id>        langsung buka sesi tertentu
-  boo --continue           lanjutkan sesi terakhir di direktori ini
-  boo --model <id>         pilih model untuk sesi ini
-  boo --effort <tingkat>   low, medium, high, atau xhigh (model Codex)
-  boo --verbose            tampilkan keluaran tool selengkapnya
-  boo --version            tampilkan versi
-  boo --help               tampilkan bantuan ini
+const USAGE = `${COMMAND} — coding agent oleh FLdev
+
+  ${COMMAND}                      mulai sesi di direktori saat ini
+  ${COMMAND} <id>                 langsung buka sesi tertentu, misal: ${COMMAND} 5bd73640
+  ${COMMAND} --resume             pilih sesi dari daftar
+  ${COMMAND} --resume <id>        langsung buka sesi tertentu
+  ${COMMAND} --continue           lanjutkan sesi terakhir di direktori ini
+  ${COMMAND} --model <id>         pilih model untuk sesi ini
+  ${COMMAND} --effort <tingkat>   low, medium, high, atau xhigh (model Codex)
+  ${COMMAND} --verbose            tampilkan keluaran tool selengkapnya
+  ${COMMAND} --version            tampilkan versi
+  ${COMMAND} --help               tampilkan bantuan ini
 
 Konfigurasi dibaca berlapis; yang belakangan menimpa yang sebelumnya:
 
@@ -180,7 +186,7 @@ function resumeRequest(): ResumeRequest {
   }
   const positional = positionalArgs()
   if (positional.length > 1) {
-    fail(`Argumen tidak dikenal: ${positional.slice(1).join(' ')}`, 'Pakai `boo <id>` untuk membuka satu sesi, atau `boo --help`.')
+    fail(`Argumen tidak dikenal: ${positional.slice(1).join(' ')}`, `Pakai \`${COMMAND} <id>\` untuk membuka satu sesi, atau \`${COMMAND} --help\`.`)
   }
   return positional.length ? { mode: 'id', id: positional[0] } : { mode: 'new' }
 }
@@ -208,7 +214,7 @@ async function resolveResume(request: ResumeRequest, workspace: string): Promise
     } else {
       const summaries = listSessions(workspace)
       if (!summaries.length) {
-        fail('Belum ada sesi tersimpan untuk direktori ini.', 'Mulai sesi baru dengan `boo`.')
+        fail('Belum ada sesi tersimpan untuk direktori ini.', `Mulai sesi baru dengan \`${COMMAND}\`.`)
       }
       if (request.mode === 'continue') {
         session = loadSession(summaries[0].id)
@@ -227,7 +233,7 @@ async function resolveResume(request: ResumeRequest, workspace: string): Promise
         if (picked === undefined) {
           console.log(`  ${theme.bold('Sesi di direktori ini')}`)
           labels.forEach((label) => console.log(`  ${label}`))
-          fail('Terminal ini tidak mendukung pemilih.', 'Jalankan `boo --resume <id>` dengan id dari daftar di atas.')
+          fail('Terminal ini tidak mendukung pemilih.', `Jalankan \`${COMMAND} --resume <id>\` dengan id dari daftar di atas.`)
         }
         if (picked === null) {
           console.log(`  ${theme.muted('dibatalkan')}`)
@@ -237,14 +243,14 @@ async function resolveResume(request: ResumeRequest, workspace: string): Promise
       }
     }
   } catch (error) {
-    if (error instanceof SessionError) fail(error.message, 'Jalankan `boo --resume` untuk memilih dari daftar sesi.')
+    if (error instanceof SessionError) fail(error.message, `Jalankan \`${COMMAND} --resume\` untuk memilih dari daftar sesi.`)
     throw error
   }
 
   if (session.workspace !== workspace) {
     fail(
       `Sesi ${shortId(session.id)} berasal dari ${session.workspace}.`,
-      `Lanjutkan dari direktori itu:  cd ${session.workspace} && boo --resume ${shortId(session.id)}`,
+      `Lanjutkan dari direktori itu:  cd ${session.workspace} && ${COMMAND} --resume ${shortId(session.id)}`,
     )
   }
   return session
@@ -411,7 +417,7 @@ async function main() {
 
   function printResumeHint(): void {
     if (!recorder.started) return
-    console.log(`\n  ${theme.muted('Lanjutkan sesi ini:')} boo --resume ${shortId(recorder.id)}`)
+    console.log(`\n  ${theme.muted('Lanjutkan sesi ini:')} ${COMMAND} --resume ${shortId(recorder.id)}`)
   }
 
   // Ctrl-C pertama menutup sesi dengan tertib; bila Boo masih bekerja, pekerjaan
@@ -826,7 +832,7 @@ async function main() {
     if (picked === undefined) {
       console.log(`\n  ${theme.bold('Sesi di direktori ini')}`)
       labels.forEach((label) => console.log(`  ${label}`))
-      console.log(`  ${theme.muted('terminal ini tidak mendukung pemilih; jalankan boo --resume <id>')}\n`)
+      console.log(`  ${theme.muted(`terminal ini tidak mendukung pemilih; jalankan ${COMMAND} --resume <id>`)}\n`)
       return
     }
     if (picked === null) {

@@ -224,22 +224,22 @@ siapa pun. Web nanti menjadi konsumen kedua dari core yang sama, bukan salinanny
 
 ## Sesi
 
-Setiap percakapan disimpan, sehingga dapat dilanjutkan setelah `boo` ditutup —
+Setiap percakapan disimpan, sehingga dapat dilanjutkan setelah `boo-code` ditutup —
 seperti `claude --resume`. Saat keluar, perintahnya ditampilkan:
 
 ```
-  Lanjutkan sesi ini: boo --resume 5bd73640
+  Lanjutkan sesi ini: boo-code --resume 5bd73640
 ```
 
 | Perintah | Fungsi |
 |---|---|
-| `boo 5bd73640` | langsung buka sesi tertentu, tanpa memilih; id lengkap atau awalannya |
-| `boo --resume 5bd73640` | sama dengan di atas |
-| `boo --resume` | pilih dari daftar sesi di direktori ini, terbaru lebih dulu |
-| `boo --continue` | langsung lanjutkan sesi yang terakhir diperbarui |
-| `/resume` | di dalam sesi: pindah ke sesi lain tanpa keluar dari `boo` |
+| `boo-code 5bd73640` | langsung buka sesi tertentu, tanpa memilih; id lengkap atau awalannya |
+| `boo-code --resume 5bd73640` | sama dengan di atas |
+| `boo-code --resume` | pilih dari daftar sesi di direktori ini, terbaru lebih dulu |
+| `boo-code --continue` | langsung lanjutkan sesi yang terakhir diperbarui |
+| `/resume` | di dalam sesi: pindah ke sesi lain tanpa keluar dari `boo-code` |
 
-`/resume` membuka pemilih yang sama dengan `boo --resume`, dengan sesi yang sedang
+`/resume` membuka pemilih yang sama dengan `boo-code --resume`, dengan sesi yang sedang
 berjalan ditandai *(aktif)*. Sesi yang ditinggalkan sudah tersimpan pesan demi pesan,
 jadi tidak ada yang hilang. Riwayat percakapan, model dan tingkat penalaran, serta
 riwayat panah atas ikut berpindah; izin *untuk sisa sesi* dikosongkan karena diberikan
@@ -266,7 +266,7 @@ berjalan. Sesi panjang dibatasi pada 20 tukar-jawab terakhir.
 ```
 
 Argumen tanpa bendera dianggap id sesi, tetapi nilai milik bendera lain tidak:
-`boo --model cx/gpt-5.5` membuka sesi baru, bukan mencari sesi bernama `cx/gpt-5.5`. Bendera `--model` dan `--effort`
+`boo-code --model cx/gpt-5.5` membuka sesi baru, bukan mencari sesi bernama `cx/gpt-5.5`. Bendera `--model` dan `--effort`
 tetap dapat dipakai untuk mengganti model sesi itu.
 
 ### Penyimpanan
