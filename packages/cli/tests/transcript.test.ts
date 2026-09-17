@@ -150,3 +150,13 @@ test('daftar tugas tampil utuh di tempatnya, tidak dihitung sebagai perubahan', 
   assert.match(output, /● Plan +0\/2 done\n +◼ Baca kode\n +□ Ubah kode\n +● Exploring +1 file\n +● Plan +1\/2 done\n +✓ Baca kode\n +◼ Ubah kode\n/)
   assert.doesNotMatch(output, /Applying/)
 })
+
+test('permintaan mode spec diringkas ke judulnya', async () => {
+  const { designPrompt } = await import('@boo/core')
+  const output = screen([
+    { role: 'user', content: designPrompt('login-google') },
+    { role: 'assistant', content: 'Design ditulis.' },
+  ])
+  assert.match(output, /› \/spec · login-google · design\n/)
+  assert.doesNotMatch(output, /Mode spec/)
+})

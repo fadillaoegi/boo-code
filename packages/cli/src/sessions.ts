@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { splitUndoNote, type Message } from '@boo/core'
+import { specPromptTitle, splitUndoNote, type Message } from '@boo/core'
 
 export const SESSIONS_DIR = join(homedir(), '.boo', 'sessions')
 
@@ -58,7 +58,8 @@ export function shortId(id: string): string {
 }
 
 function titleOf(message: Message | undefined): string {
-  const text = splitUndoNote(message?.content ?? '').text.replace(/\s+/g, ' ').trim()
+  const content = splitUndoNote(message?.content ?? '').text
+  const text = (specPromptTitle(content) ?? content).replace(/\s+/g, ' ').trim()
   if (!text) return '(tanpa judul)'
   return text.length > TITLE_LENGTH ? `${text.slice(0, TITLE_LENGTH)}…` : text
 }

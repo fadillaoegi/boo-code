@@ -8,7 +8,7 @@
  * sama seperti saat sesi berjalan.
  */
 
-import { CANCELLED_REPLY, FAILED_REPLY_PREFIX, parseTodos, splitUndoNote, TURN_LIMIT_REPLY_PREFIX, type Message } from '@boo/core'
+import { CANCELLED_REPLY, FAILED_REPLY_PREFIX, parseTodos, specPromptTitle, splitUndoNote, TURN_LIMIT_REPLY_PREFIX, type Message } from '@boo/core'
 import { MarkdownRenderer } from './markdown.ts'
 import { PhaseTally, phaseLine, phaseOf, type Phase } from './status.ts'
 import { theme } from './theme.ts'
@@ -95,7 +95,9 @@ function renderExchange(exchange: Message[], width: number): string {
     if (message.role === 'user') {
       const { note, text } = splitUndoNote(message.content ?? '')
       if (note) output += `  ${theme.accent('↺')} ${theme.muted('perubahan berkas sebelumnya dibatalkan dengan /undo')}\n\n`
-      const [first, ...rest] = text.split('\n')
+      // Permintaan mode spec disusun Boo dan panjang; cukup judulnya, seperti saat berlangsung.
+      const spec = specPromptTitle(text)
+      const [first, ...rest] = spec === null ? text.split('\n') : [`/spec · ${spec}`]
       output += `${theme.accentBold('›')} ${first}\n${rest.map((line) => `  ${line}\n`).join('')}`
       continue
     }

@@ -24,3 +24,20 @@ export { latestTodos, parseTodos, todoProgress } from './tools/todo.ts'
 export type { TodoItem, TodoStatus } from './tools/todo.ts'
 export { DEFAULT_MAX_CONTEXT_TOKENS, estimateMessageTokens, trimToBudget } from './agent/context.ts'
 export type { TrimResult } from './agent/context.ts'
+export {
+  designPrompt,
+  listSpecs,
+  nextTask,
+  parseTasks,
+  readSpec,
+  requirementsPrompt,
+  revisePrompt,
+  slugify,
+  SPEC_PROMPT_MARK,
+  specPromptTitle,
+  SPECS_DIRECTORY,
+  taskPrompt,
+  tasksPrompt,
+  uniqueSpecName,
+} from './spec/specs.ts'
+export type { SpecDocument, SpecStage, SpecSummary, SpecTask } from './spec/specs.ts'

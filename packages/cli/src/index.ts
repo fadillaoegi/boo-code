@@ -19,7 +19,21 @@ import {
   findSelection,
   groupModels,
   loadInstructions,
+  designPrompt,
+  listSpecs,
+  nextTask,
   parseTodos,
+  readSpec,
+  revisePrompt,
+  specPromptTitle,
+  SPECS_DIRECTORY,
+  taskPrompt,
+  tasksPrompt,
+  requirementsPrompt,
+  uniqueSpecName,
+  type SpecDocument,
+  type SpecSummary,
+  type SpecTask,
   todoProgress,
   NineRouterProvider,
   resolveInWorkspace,
@@ -130,6 +144,8 @@ const HELP = `  /model          pilih model dengan tombol panah
                   ganti langsung, misal /model cx/gpt-5.6-sol xhigh
   /resume         pilih dan lanjutkan sesi lain di direktori ini
   /undo           batalkan perubahan berkas dari permintaan terakhir
+  /spec <ide>     rancang fitur dulu: requirements, design, tasks
+  /spec           lihat spec yang ada dan lanjutkan tahapnya
   /init           minta Boo menulis BOO.md berisi aturan proyek ini
   /queue          lihat permintaan yang mengantre
   /queue hapus    kosongkan antrean
@@ -298,7 +314,8 @@ function sessionLabels(summaries: SessionSummary[]): string[] {
 /** Riwayat panah atas dari sebuah sesi: pertanyaannya, terbaru lebih dulu. */
 function promptsOf(messages: Message[]): string[] {
   return messages
-    .filter((message) => message.role === 'user' && message.content)
+    // Permintaan mode spec panjang dan disusun Boo; memanggilnya ulang tidak berguna.
+    .filter((message) => message.role === 'user' && message.content && specPromptTitle(message.content) === null)
     .map((message) => splitUndoNote(message.content as string).text)
     .reverse()
 }
@@ -944,6 +961,112 @@ async function main() {
     console.log(`  ${theme.accent('↺')} ${theme.muted(`${parts.join(', ')}. Boo diberi tahu di permintaan berikutnya.`)}\n`)
   }
 
+  /**
+   * Permintaan yang disusun Boo sendiri, dijalankan sebelum antrean. `display`
+   * yang tampil di prompt, karena isi permintaannya panjang. `after` dijalankan
+   * hanya bila permintaan itu selesai dengan normal.
+   */
+  interface InternalRequest {
+    display: string
+    prompt: string
+    after?: () => Promise<void>
+  }
+  let internal: InternalRequest | null = null
+
+  function specRequest(name: string, prompt: string, after: () => Promise<void> = () => offerSpecStep(name)): void {
+    internal = { display: `/spec · ${specPromptTitle(prompt) ?? name}`, prompt, after }
+  }
+
+  function describeSpec(spec: SpecSummary): string {
+    const done = spec.tasks.filter((task) => task.done).length
+    switch (spec.stage) {
+      case 'requirements': return 'belum ada requirements'
+      case 'design': return 'requirements siap · berikutnya design'
+      case 'tasks': return 'design siap · berikutnya tasks'
+      case 'implementing': return `tugas ${done}/${spec.tasks.length} selesai`
+      case 'done': return `selesai · ${spec.tasks.length} tugas`
+    }
+  }
+
+  async function specCommand(argument: string): Promise<void> {
+    if (argument) {
+      const name = uniqueSpecName(workspace, argument)
+      specRequest(name, requirementsPrompt(name, argument))
+      return
+    }
+    const specs = listSpecs(workspace)
+    if (!specs.length) {
+      console.log(`  ${theme.muted(`Belum ada spec di ${SPECS_DIRECTORY}. Mulai dengan: /spec <ide fitur>, misal /spec login dengan Google`)}\n`)
+      return
+    }
+    const picked = await choose('Spec di proyek ini', specs.map((spec) => `${spec.name}  ${theme.muted(describeSpec(spec))}`), -1, 0)
+    if (picked === null) return
+    await offerSpecStep(specs[picked].name)
+  }
+
+  /** Menawarkan langkah berikutnya sesuai tahap spec, setelah setiap tahap selesai. */
+  async function offerSpecStep(name: string): Promise<void> {
+    const spec = readSpec(workspace, name)
+    const where = `${SPECS_DIRECTORY}/${name}`
+    if (!spec || spec.stage === 'requirements') {
+      console.log(`  ${theme.muted(`${where}/requirements.md belum ditulis. Mulai ulang dengan /spec <ide fitur>.`)}\n`)
+      return
+    }
+    if (spec.stage === 'done') {
+      console.log(`  ${theme.accent('✓')} ${theme.muted(`Semua ${spec.tasks.length} tugas spec ${name} selesai.`)}\n`)
+      return
+    }
+
+    const revise = async (document: SpecDocument) => {
+      const feedback = (await ask(`  ${theme.accent('✎')} ${theme.bold(`Arahan revisi ${document}:`)} `))?.trim()
+      if (feedback) specRequest(name, revisePrompt(name, document, feedback))
+    }
+
+    if (spec.stage === 'design' || spec.stage === 'tasks') {
+      const [ready, next, prompt] = spec.stage === 'design'
+        ? ['requirements.md', 'design', designPrompt(name)] as const
+        : ['design.md', 'tasks', tasksPrompt(name)] as const
+      const choice = await choose(
+        `${where}/${ready} siap ditinjau. Langkah berikutnya?`,
+        [`Setujui dan lanjut ke ${next}`, `Revisi ${ready}`, 'Berhenti dulu (lanjutkan nanti dengan /spec)'],
+        -1,
+        0,
+      )
+      if (choice === 0) specRequest(name, prompt)
+      else if (choice === 1) await revise(ready)
+      return
+    }
+
+    const task = nextTask(spec) as SpecTask
+    const done = spec.tasks.filter((item) => item.done).length
+    const choice = await choose(
+      `${where}/tasks.md · ${done}/${spec.tasks.length} selesai · berikutnya ${task.number}. ${task.title}`,
+      ['Kerjakan tugas berikutnya', 'Kerjakan semua tugas yang tersisa', 'Revisi tasks.md', 'Berhenti dulu (lanjutkan nanti dengan /spec)'],
+      -1,
+      0,
+    )
+    if (choice === 0 || choice === 1) specRequest(name, taskPrompt(name, task), () => afterSpecTask(name, task, choice === 1))
+    else if (choice === 2) await revise('tasks.md')
+  }
+
+  /** Setelah satu tugas: lanjut otomatis bila diminta dan tugasnya benar-benar dicentang. */
+  async function afterSpecTask(name: string, task: SpecTask, all: boolean): Promise<void> {
+    const spec = readSpec(workspace, name)
+    const updated = spec?.tasks.find((item) => item.number === task.number)
+    if (!spec || !updated?.done) {
+      console.log(`  ${theme.muted(`Tugas ${task.number} belum dicentang di tasks.md, jadi dianggap belum selesai.`)}\n`)
+      if (spec) await offerSpecStep(name)
+      return
+    }
+    const next = nextTask(spec)
+    if (all && next) {
+      console.log(`  ${theme.accent('✓')} ${theme.muted(`Tugas ${task.number} selesai · lanjut ke tugas ${next.number} (esc untuk berhenti)`)}\n`)
+      specRequest(name, taskPrompt(name, next), () => afterSpecTask(name, next, true))
+      return
+    }
+    await offerSpecStep(name)
+  }
+
   async function switchSession(): Promise<void> {
     const summaries = listSessions(workspace)
     if (!summaries.length) {
@@ -1009,6 +1132,8 @@ async function main() {
   if (resumed) showResumed(resumed, agent.restored)
   console.log(`  ${theme.muted('ketik perintah, /help untuk daftar perintah')}\n`)
 
+  /** Bagaimana permintaan terakhir berakhir; diisi setiap kali permintaan dimulai. */
+  let outcome: 'done' | 'cancelled' | 'stopped'
   for (;;) {
     // Nama model di baris sendiri dan tempat mengetik di bawahnya. Header dicetak
     // terpisah, bukan dijadikan bagian prompt: prompt readline yang memuat baris
@@ -1019,10 +1144,17 @@ async function main() {
     const header = `${theme.accentBold('boo')} ${theme.muted(`· ${modelLabel(provider.model, provider.reasoningEffort)}`)}`
     const promptText = `${theme.accentBold('›')} `
     let input: string
+    let after: (() => Promise<void>) | undefined
 
-    // Permintaan yang sudah mengantre dikerjakan lebih dulu, berurutan.
-    const queued = pending.shift()
-    if (queued !== undefined) {
+    // Permintaan yang disusun Boo sendiri lebih dulu, lalu antrean, berurutan.
+    const job = internal as InternalRequest | null
+    const queued = job ? undefined : pending.shift()
+    if (job) {
+      internal = null
+      stdout.write(`${header}\n${promptText}${job.display}\n`)
+      input = job.prompt
+      after = job.after
+    } else if (queued !== undefined) {
       const sisa = pending.length ? theme.muted(`  (${pending.length} lagi mengantre)`) : ''
       stdout.write(`${header}\n${promptText}${queued}${sisa}\n`)
       input = queued
@@ -1054,9 +1186,14 @@ async function main() {
       await undoChanges()
       continue
     }
+    if (input === '/spec' || input.startsWith('/spec ')) {
+      await specCommand(input.slice('/spec'.length).trim())
+      continue
+    }
     if (input === '/init') input = INIT_PROMPT
 
     busy = true
+    outcome = 'done'
     currentRequest = new AbortController()
     try {
       const tally = new PhaseTally()
@@ -1222,6 +1359,7 @@ async function main() {
             break
 
           case 'cancelled':
+            outcome = 'cancelled'
             finishAnswer()
             // Pekerjaan yang sempat selesai tetap diringkas; fase kosong dibuang.
             status.discardEmpty()
@@ -1248,6 +1386,7 @@ async function main() {
           }
 
           case 'turn-limit':
+            outcome = 'stopped'
             finishAnswer()
             status.commit()
             emit(`  ${theme.muted('Ketik "lanjutkan" untuk meneruskan pekerjaannya.')}\n`)
@@ -1260,6 +1399,7 @@ async function main() {
             break
 
           case 'error':
+            outcome = 'stopped'
             status.clear()
             finishAnswer()
             emit(`\n  ${theme.danger('error')} ${event.message}\n`)
@@ -1282,6 +1422,8 @@ async function main() {
     }
     stdout.write(midLine ? '\n\n' : '\n')
     midLine = false
+    // Langkah lanjutan hanya setelah permintaan selesai normal; Esc atau error menghentikan alurnya.
+    if (after && outcome === 'done') await after()
   }
 
   readline.close()

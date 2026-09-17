@@ -117,6 +117,8 @@ Terminal). Tempelan satu baris langsung disisipkan apa adanya.
 | `/resume` | pilih dan lanjutkan sesi lain di direktori ini |
 | `/init` | minta Boo menulis `BOO.md` berisi aturan proyek ini |
 | `/undo` | batalkan perubahan berkas dari permintaan terakhir |
+| `/spec <ide>` | rancang fitur dulu: requirements, design, tasks, lalu kerjakan |
+| `/spec` | lihat spec di proyek ini dan lanjutkan tahapnya |
 | `/queue` | lihat permintaan yang mengantre |
 | `/queue hapus` | kosongkan antrean |
 | `/help` | daftar perintah |
@@ -693,6 +695,63 @@ Setelah memilih, panel dihapus dan hanya satu baris keputusan yang tersisa:
 Catatan untuk perintah memuat perintahnya sendiri, bukan deskripsi yang ditulis
 model tentang perintah itu. Core meminta izin lewat callback `askPermission`, sehingga
 web nanti dapat memakai mekanisme persetujuan sendiri tanpa mengubah core.
+
+## Mode spec: rancang dulu, baru kerjakan
+
+Untuk fitur yang lebih dari perubahan kecil, `/spec` memecah pekerjaan menjadi
+tiga dokumen yang kamu tinjau satu per satu sebelum ada kode yang ditulis —
+seperti Kiro:
+
+```
+› /spec login dengan Google untuk halaman admin
+```
+
+| Tahap | Berkas | Isinya |
+|---|---|---|
+| 1. Requirements | `.boo/specs/<nama>/requirements.md` | user story dan acceptance criteria (`WHEN … THEN sistem SHALL …`), termasuk kasus tepi |
+| 2. Design | `.boo/specs/<nama>/design.md` | pendekatan, arsitektur, berkas yang tersentuh, model data, error, strategi test — merujuk nomor requirement |
+| 3. Tasks | `.boo/specs/<nama>/tasks.md` | checklist implementasi kecil dan bertahap, test bersama kodenya |
+
+Setiap tahap selesai, Boo bertanya:
+
+```
+  .boo/specs/login-dengan-google/requirements.md siap ditinjau. Langkah berikutnya?
+ > Setujui dan lanjut ke design
+   Revisi requirements.md
+   Berhenti dulu (lanjutkan nanti dengan /spec)
+```
+
+Buka berkasnya, baca, lalu pilih. **Revisi** meminta arahanmu dan memperbarui
+dokumen itu saja. Kamu juga bebas mengedit berkasnya sendiri sebelum menyetujui.
+
+Setelah tasks siap:
+
+```
+  .boo/specs/login-dengan-google/tasks.md · 2/6 selesai · berikutnya 3. Tambah callback OAuth
+ > Kerjakan tugas berikutnya
+   Kerjakan semua tugas yang tersisa
+   Revisi tasks.md
+   Berhenti dulu (lanjutkan nanti dengan /spec)
+```
+
+Setiap tugas dikerjakan dalam satu permintaan: Boo membaca ketiga dokumen,
+mengerjakan **hanya** tugas itu, memverifikasinya dengan test atau typecheck, lalu
+mencentang `[x]` di `tasks.md`. Dengan "Kerjakan semua", tugas berikutnya langsung
+dimulai — tetapi hanya bila tugas sebelumnya benar-benar dicentang. Esc menghentikan
+alurnya kapan saja.
+
+Semua keadaan ada di berkas, bukan di sesi: spec bisa di-commit bersama kodenya,
+diedit tangan, dan dilanjutkan kapan pun dengan `/spec`, yang menampilkan semua spec
+beserta tahapnya:
+
+```
+  Spec di proyek ini
+ > login-dengan-google  tugas 2/6 selesai
+   export-csv           requirements siap · berikutnya design
+```
+
+Penulisan dokumen tetap lewat `write_file` dan `edit_file`, dengan panel izin yang
+sama seperti perubahan lainnya.
 
 ## Daftar tugas
 
