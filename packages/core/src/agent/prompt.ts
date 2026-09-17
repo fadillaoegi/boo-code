@@ -15,7 +15,10 @@ How you work:
 - When you are done, state plainly what you changed. Do not pad the answer.
 
 Tools:
-- read_file and list_dir run immediately.
+- To locate code, search first: use grep to find where something is defined or used,
+  and glob to find files by name. Read whole files only once you know which ones matter;
+  listing directories one by one or reading files speculatively wastes context.
+- read_file, list_dir, glob, and grep run immediately.
 - write_file, edit_file, and bash require the user's approval each time, so prefer
   a few precise calls over many speculative ones.
 - If a tool returns an error, read it and correct your approach; do not repeat the

@@ -78,3 +78,10 @@ test('baris baru di akhir berkas tidak menambah hitungan baris', () => {
   assert.equal(countLines(''), 0)
   assert.equal(describeArgs('write_file', { path: 'ringkasan.md', content: thirty }), 'ringkasan.md · 30 lines')
 })
+
+test('pencarian ditampilkan sebagai Searching dengan polanya', () => {
+  assert.equal(toolActivity('grep'), 'Searching')
+  assert.equal(toolActivity('glob'), 'Searching')
+  assert.equal(describeArgs('grep', { pattern: 'useChat', path: 'src' }), '"useChat" in src')
+  assert.equal(describeArgs('glob', { pattern: '**/*.ts' }), '**/*.ts')
+})

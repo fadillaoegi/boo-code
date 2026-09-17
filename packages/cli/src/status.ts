@@ -252,6 +252,7 @@ export class StatusLine {
 export class PhaseTally {
   private filesRead = 0
   private dirsListed = 0
+  private searches = 0
   private readonly changed: string[] = []
   private commands = 0
   private failures = 0
@@ -259,6 +260,7 @@ export class PhaseTally {
   reset(): void {
     this.filesRead = 0
     this.dirsListed = 0
+    this.searches = 0
     this.changed.length = 0
     this.commands = 0
     this.failures = 0
@@ -273,6 +275,10 @@ export class PhaseTally {
       case 'list_dir':
         this.dirsListed += 1
         break
+      case 'glob':
+      case 'grep':
+        this.searches += 1
+        break
       case 'bash':
         this.commands += 1
         break
@@ -286,6 +292,7 @@ export class PhaseTally {
     const parts: string[] = []
     if (this.filesRead) parts.push(`${this.filesRead} file${this.filesRead > 1 ? 's' : ''}`)
     if (this.dirsListed) parts.push(`${this.dirsListed} director${this.dirsListed > 1 ? 'ies' : 'y'}`)
+    if (this.searches) parts.push(`${this.searches} search${this.searches > 1 ? 'es' : ''}`)
     return parts.join(', ') || 'scanning'
   }
 
@@ -300,6 +307,8 @@ export class PhaseTally {
 }
 
 /** Menentukan fase dari nama tool. */
+const EXPLORING_TOOLS = new Set(['read_file', 'list_dir', 'glob', 'grep'])
+
 export function phaseOf(tool: string): Phase {
-  return tool === 'read_file' || tool === 'list_dir' ? 'exploring' : 'applying'
+  return EXPLORING_TOOLS.has(tool) ? 'exploring' : 'applying'
 }

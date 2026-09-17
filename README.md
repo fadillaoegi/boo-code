@@ -213,7 +213,7 @@ packages/
 ├── core/          # otak — tidak tahu apa pun soal terminal atau browser
 │   ├── domain/    # tipe pesan dan kontrak Tool
 │   ├── provider/  # adapter 9Router (streaming + tool calling)
-│   ├── tools/     # read_file, list_dir, write_file, edit_file, bash
+│   ├── tools/     # read_file, list_dir, glob, grep, write_file, edit_file, bash
 │   ├── agent/     # loop dan system prompt
 │   └── design/    # token visual, sama persis dengan yang dipakai web
 └── cli/           # binary `boo` — hanya menggambar dan meminta izin
@@ -376,6 +376,32 @@ menghapus kalimat pengantar model, dan keluaran yang tiba selagi kamu mengetik
 permintaan berikutnya ditahan lalu dilepas setelah ketikan dikirim — tidak menyusup
 ke baris ketik maupun menghapus jawaban yang sedang mengalir.
 
+## Pencarian kode
+
+Agent menemukan kode dengan mencari lebih dulu, bukan menelusuri folder satu per satu
+lalu membaca berkas utuh — cara itu lambat dan cepat menghabiskan anggaran konteks.
+
+| Tool | Fungsi |
+|---|---|
+| `glob` | mencari berkas berdasarkan pola nama, misalnya `src/**/*.ts`; terakhir diubah lebih dulu |
+| `grep` | mencari isi berkas dengan regex; hasil berupa `path:baris: isi` |
+
+`grep` dapat dibatasi ke satu berkas atau folder (`path`), ke pola berkas (`include`),
+tanpa membedakan huruf besar-kecil (`ignore_case`), atau hanya mengembalikan nama berkas
+beserta jumlah kecocokan (`files_only`). Hasil dibatasi 200 baris.
+
+Folder hasil build dan dependensi — `node_modules`, `dist`, `build`, `.git`, `target`,
+dan sejenisnya — tidak ditelusuri. Berkas biner dan berkas di atas 1 MB dilewati. Pola
+`**/*` tidak mencakup dotfile, sama seperti ripgrep; sebut polanya secara eksplisit bila
+perlu, misalnya `.github/**/*.yml`.
+
+Dua batas yang sama dengan tool lain tetap berlaku:
+
+- **Isi berkas rahasia tidak pernah dibaca**, termasuk bila `.env` disasar langsung
+  lewat `path` atau `include`; berkasnya dilewati dan dicatat sebagai *rahasia dilewati*.
+- **Pencarian tidak dapat keluar dari workspace**, termasuk lewat pola seperti
+  `../**/*` atau path absolut.
+
 ## Tampilan jawaban
 
 Jawaban model dirender dari markdown menjadi teks terminal yang rapi, dengan warna
@@ -442,6 +468,8 @@ lazim saat membaca file raksasa — isinya dipotong, bloknya tidak dibuang.
 |---|---|---|
 | `read_file` | aman | langsung jalan |
 | `list_dir` | aman | langsung jalan |
+| `glob` | aman | langsung jalan |
+| `grep` | aman | langsung jalan |
 | `write_file` | konfirmasi | minta izin tiap kali |
 | `edit_file` | konfirmasi | minta izin tiap kali |
 | `bash` | konfirmasi | minta izin tiap kali |

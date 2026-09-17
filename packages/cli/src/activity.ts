@@ -18,6 +18,8 @@ export type ActivityLabel =
 
 const TOOL_LABEL: Record<string, ActivityLabel> = {
   list_dir: 'Searching',
+  glob: 'Searching',
+  grep: 'Searching',
   read_file: 'Reading',
   write_file: 'Writing',
   edit_file: 'Implementing',
@@ -129,6 +131,10 @@ function pluralLines(count: number): string {
  */
 export function describeArgs(tool: string, args: Record<string, unknown>): string {
   if (typeof args.command === 'string') return args.command
+  if ((tool === 'grep' || tool === 'glob') && typeof args.pattern === 'string') {
+    const where = typeof args.path === 'string' && args.path !== '.' ? ` in ${args.path}` : ''
+    return tool === 'grep' ? `"${args.pattern}"${where}` : `${args.pattern}${where}`
+  }
   const path = typeof args.path === 'string' ? args.path : tool === 'list_dir' ? '.' : ''
   if (tool === 'write_file' && path && typeof args.content === 'string') {
     return `${path} · ${pluralLines(countLines(args.content))}`
