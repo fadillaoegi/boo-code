@@ -15,6 +15,7 @@ export type ActivityLabel =
   | 'Writing'
   | 'Implementing'
   | 'Running'
+  | 'Checking'
 
 const TOOL_LABEL: Record<string, ActivityLabel> = {
   list_dir: 'Searching',
@@ -24,6 +25,8 @@ const TOOL_LABEL: Record<string, ActivityLabel> = {
   write_file: 'Writing',
   edit_file: 'Implementing',
   bash: 'Running',
+  bash_output: 'Checking',
+  bash_kill: 'Running',
 }
 
 /** Label untuk tool; tool yang tidak dikenal dianggap mengubah sesuatu. */
@@ -130,7 +133,8 @@ function pluralLines(count: number): string {
  * perintah untuk bash, dan jumlah baris untuk berkas yang ditulis.
  */
 export function describeArgs(tool: string, args: Record<string, unknown>): string {
-  if (typeof args.command === 'string') return args.command
+  if (typeof args.command === 'string') return args.run_in_background ? `${args.command} · background` : args.command
+  if ((tool === 'bash_output' || tool === 'bash_kill') && typeof args.id === 'string') return args.id
   if ((tool === 'grep' || tool === 'glob') && typeof args.pattern === 'string') {
     const where = typeof args.path === 'string' && args.path !== '.' ? ` in ${args.path}` : ''
     return tool === 'grep' ? `"${args.pattern}"${where}` : `${args.pattern}${where}`
@@ -140,4 +144,21 @@ export function describeArgs(tool: string, args: Record<string, unknown>): strin
     return `${path} · ${pluralLines(countLines(args.content))}`
   }
   return path
+}
+
+/**
+ * Baris terakhir yang berisi dari keluaran perintah yang sedang mengalir, untuk
+ * baris status. Warna dan bilah progres yang ditulis ulang dengan carriage return
+ * dibersihkan, agar yang tampil adalah keadaan terakhirnya.
+ */
+export function lastOutputLine(output: string): string {
+  const ESC = String.fromCharCode(27)
+  const lines = output
+    .replace(new RegExp(`${ESC}\\[[0-9;?]*[ -/]*[@-~]`, 'g'), '')
+    .split('\n')
+    .map((line) => line.slice(line.lastIndexOf('\r', line.length - 2) + 1).replace(/\r$/, '').trim())
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index]) return lines[index].replace(/\s+/g, ' ')
+  }
+  return ''
 }

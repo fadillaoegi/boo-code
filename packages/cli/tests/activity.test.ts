@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { countLines, describeArgs, ToolCallProgress, toolActivity, turnActivity } from '../src/activity.ts'
+import { countLines, describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from '../src/activity.ts'
 
 /** Mengalirkan argumen JSON potong demi potong, seperti dari provider. */
 function stream(name: string, args: object, size: number): ToolCallProgress {
@@ -84,4 +84,17 @@ test('pencarian ditampilkan sebagai Searching dengan polanya', () => {
   assert.equal(toolActivity('glob'), 'Searching')
   assert.equal(describeArgs('grep', { pattern: 'useChat', path: 'src' }), '"useChat" in src')
   assert.equal(describeArgs('glob', { pattern: '**/*.ts' }), '**/*.ts')
+})
+
+test('baris terakhir keluaran: warna dan bilah progres dibersihkan, baris kosong dilewati', () => {
+  const ESC = String.fromCharCode(27)
+  assert.equal(lastOutputLine('langkah 1\nlangkah 2\n\n'), 'langkah 2')
+  assert.equal(lastOutputLine(`${ESC}[32m✓${ESC}[0m lulus\n`), '✓ lulus')
+  assert.equal(lastOutputLine('unduh 10%\runduh 55%\runduh 90%'), 'unduh 90%')
+  assert.equal(lastOutputLine(''), '')
+})
+
+test('argumen perintah latar belakang dan pemeriksaannya', () => {
+  assert.equal(describeArgs('bash', { command: 'pnpm dev', run_in_background: true }), 'pnpm dev · background')
+  assert.equal(describeArgs('bash_output', { id: 'bg1' }), 'bg1')
 })

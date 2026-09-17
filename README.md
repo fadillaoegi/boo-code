@@ -214,7 +214,7 @@ packages/
 ├── core/          # otak — tidak tahu apa pun soal terminal atau browser
 │   ├── domain/    # tipe pesan dan kontrak Tool
 │   ├── provider/  # adapter 9Router (streaming + tool calling)
-│   ├── tools/     # read_file, list_dir, glob, grep, write_file, edit_file, bash
+│   ├── tools/     # read_file, list_dir, glob, grep, write_file, edit_file, bash, bash_output, bash_kill
 │   ├── agent/     # loop dan system prompt
 │   └── design/    # token visual, sama persis dengan yang dipakai web
 └── cli/           # binary `boo` — hanya menggambar dan meminta izin
@@ -557,6 +557,8 @@ lazim saat membaca file raksasa — isinya dipotong, bloknya tidak dibuang.
 | `write_file` | konfirmasi | minta izin tiap kali |
 | `edit_file` | konfirmasi | minta izin tiap kali |
 | `bash` | konfirmasi | minta izin tiap kali |
+| `bash_output` | aman | membaca keluaran proses latar belakang milik Boo |
+| `bash_kill` | aman | menghentikan proses latar belakang milik Boo |
 
 Setiap tindakan yang mengubah sesuatu ditanyakan lewat panel yang menyebut
 tindakannya dengan bahasa manusia dan menampilkan isinya:
@@ -613,6 +615,59 @@ Setelah memilih, panel dihapus dan hanya satu baris keputusan yang tersisa:
 Catatan untuk perintah memuat perintahnya sendiri, bukan deskripsi yang ditulis
 model tentang perintah itu. Core meminta izin lewat callback `askPermission`, sehingga
 web nanti dapat memakai mekanisme persetujuan sendiri tanpa mengubah core.
+
+## Menjalankan perintah
+
+**Shell.** Boo memakai shell kamu (`$SHELL`) bila sintaksnya kompatibel — bash,
+zsh, sh, dash, ksh. Selain itu bash, lalu sh. Jadi perintah yang sama berjalan di
+macOS dengan zsh maupun di VPS Linux yang hanya punya bash atau sh. Pengguna fish
+tetap aman: perintah dijalankan dengan bash.
+
+**Keluaran tampil langsung.** Selama perintah berjalan, baris terakhir
+keluarannya tampil di baris status:
+
+```
+  ⠹ Running       ✓ tests/math.test.js (12 tests)  4s  · esc untuk berhenti
+```
+
+**Keluaran panjang tidak menggagalkan perintah.** `pnpm install` yang cerewet
+tetap dilaporkan berhasil. Yang dikirim ke model hanya 8 ribu karakter pertama dan
+22 ribu karakter terakhir — tempat perintah dimulai dan tempat error biasanya
+muncul — dengan catatan berapa yang dilewati. Warna dan bilah progres dibuang.
+
+**Batas waktu.** Bawaan 120 detik. Model dapat menaikkannya per perintah sampai
+600 detik untuk build atau test yang memang lama. Saat habis, keluaran sejauh ini
+tetap dilaporkan.
+
+**Tidak menggantung menunggu jawaban.** Masukan standar ditutup, jadi perintah
+yang bertanya (`npm init`) langsung selesai, bukan menunggu sampai batas waktu.
+Model diarahkan memakai flag seperti `--yes`.
+
+**Proses anak ikut berhenti.** `pnpm test` menjalankan node, yang menjalankan
+proses lain. Perintah berjalan dalam process group sendiri, jadi saat dihentikan —
+Esc, batas waktu, atau `bash_kill` — seluruh turunannya ikut berhenti, tidak
+tertinggal memakan port.
+
+### Latar belakang: dev server dan watcher
+
+Perintah yang tidak pernah selesai sendiri, seperti `pnpm dev`, dijalankan di
+latar belakang. Panel izin menyebutnya "Jalankan perintah di latar belakang".
+Boo langsung mendapat id (`bg1`) dan bisa lanjut bekerja:
+
+```
+› jalankan dev server, lalu cek apakah halamannya error
+  ✓ Jalankan perintah di latar belakang · pnpm dev · diizinkan
+  ● Applying      1 command  2.8s
+  ● Applying      1 output check  1.7s
+```
+
+`bash_output` membaca keluaran baru sejak pemeriksaan terakhir beserta statusnya
+(masih berjalan, selesai dengan exit code, atau dihentikan). `bash_kill`
+menghentikannya. Keduanya tidak meminta izin karena hanya menyentuh proses yang
+dimulai Boo sendiri, yang sudah kamu izinkan saat dimulai.
+
+Esc tidak menghentikan proses latar belakang — ia memang dimaksudkan tetap hidup.
+Semua proses latar belakang dihentikan saat Boo keluar.
 
 ## File rahasia
 

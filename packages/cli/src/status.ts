@@ -261,6 +261,8 @@ export class PhaseTally {
   private searches = 0
   private readonly changed: string[] = []
   private commands = 0
+  private checks = 0
+  private stopped = 0
   private failures = 0
 
   reset(): void {
@@ -269,6 +271,8 @@ export class PhaseTally {
     this.searches = 0
     this.changed.length = 0
     this.commands = 0
+    this.checks = 0
+    this.stopped = 0
     this.failures = 0
   }
 
@@ -287,6 +291,12 @@ export class PhaseTally {
         break
       case 'bash':
         this.commands += 1
+        break
+      case 'bash_output':
+        this.checks += 1
+        break
+      case 'bash_kill':
+        this.stopped += 1
         break
       default:
         if (!isError && target && !this.changed.includes(target)) this.changed.push(target)
@@ -307,6 +317,8 @@ export class PhaseTally {
     const parts: string[] = []
     if (this.changed.length) parts.push(this.changed.join(', '))
     if (this.commands) parts.push(`${this.commands} command${this.commands > 1 ? 's' : ''}`)
+    if (this.checks) parts.push(`${this.checks} output check${this.checks > 1 ? 's' : ''}`)
+    if (this.stopped) parts.push(`${this.stopped} stopped`)
     if (this.failures) parts.push(`${this.failures} failed`)
     return parts.join(' · ') || 'applying'
   }

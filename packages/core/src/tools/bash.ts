@@ -1,27 +1,47 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { Tool } from '../domain/tool.ts'
+import { backgroundProcesses } from './background.ts'
+import { resolveShell, runCommand } from './shell.ts'
 
-const run = promisify(execFile)
-const TIMEOUT_MS = 120_000
-const MAX_OUTPUT = 30_000
+export const DEFAULT_TIMEOUT_SECONDS = 120
+export const MAX_TIMEOUT_SECONDS = 600
 
-interface Args { command: string; description?: string }
+interface Args {
+  command: string
+  description?: string
+  timeout?: number
+  run_in_background?: boolean
+}
+
+const shell = resolveShell()
+
+const DESCRIPTION = `Run a shell command (${shell.name}) in the workspace directory. Use for builds, tests, git, and package managers.
+- Commands time out after ${DEFAULT_TIMEOUT_SECONDS} seconds unless you set timeout (max ${MAX_TIMEOUT_SECONDS}).
+- Standard input is closed: pass non-interactive flags (for example --yes) instead of expecting prompts.
+- For commands that never finish on their own — dev servers, watchers — set run_in_background. You get an id at once; check it with bash_output and stop it with bash_kill.
+- Very long output keeps its beginning and end; the middle is skipped.`
+
+/** Batas waktu dari argumen model, dibulatkan ke rentang yang diizinkan. */
+export function timeoutSeconds(requested: unknown): number {
+  const value = typeof requested === 'number' && Number.isFinite(requested) ? requested : DEFAULT_TIMEOUT_SECONDS
+  return Math.min(MAX_TIMEOUT_SECONDS, Math.max(1, Math.round(value)))
+}
 
 export const bashTool: Tool<Args> = {
   name: 'bash',
-  description: 'Run a shell command in the workspace directory. Use for builds, tests, and git.',
+  description: DESCRIPTION,
   risk: 'confirm',
   schema: {
     type: 'function',
     function: {
       name: 'bash',
-      description: 'Run a shell command in the workspace directory. Use for builds, tests, and git.',
+      description: DESCRIPTION,
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'The shell command to run' },
           description: { type: 'string', description: 'Short description of what the command does' },
+          timeout: { type: 'number', description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SECONDS}, max ${MAX_TIMEOUT_SECONDS})` },
+          run_in_background: { type: 'boolean', description: 'Start the command and return immediately with an id' },
         },
         required: ['command'],
       },
@@ -29,26 +49,43 @@ export const bashTool: Tool<Args> = {
   },
   preview: (args) => args.command,
   async run(args, context) {
-    try {
-      const { stdout, stderr } = await run('/bin/zsh', ['-c', args.command], {
-        cwd: context.workspace,
-        timeout: TIMEOUT_MS,
-        maxBuffer: MAX_OUTPUT * 4,
-        // Menghentikan proses perintah, bukan hanya berhenti menunggu hasilnya.
-        signal: context.signal,
-      })
-      const output = [stdout, stderr].filter(Boolean).join('\n').trim()
-      return { content: output.slice(0, MAX_OUTPUT) || '(tanpa keluaran)' }
-    } catch (error) {
-      if (context.signal?.aborted) {
-        return { content: 'Dibatalkan: perintah dihentikan oleh pengguna sebelum selesai.', isError: true }
-      }
-      const failure = error as { stdout?: string; stderr?: string; message?: string; code?: number }
-      const output = [failure.stdout, failure.stderr].filter(Boolean).join('\n').trim()
+    if (args.run_in_background) {
+      const id = backgroundProcesses.start(args.command, context.workspace, shell)
+      return { content: `Berjalan di latar belakang dengan id ${id}. Periksa keluarannya dengan bash_output, hentikan dengan bash_kill.` }
+    }
+
+    const seconds = timeoutSeconds(args.timeout)
+    const result = await runCommand(args.command, {
+      cwd: context.workspace,
+      shell,
+      timeoutMs: seconds * 1_000,
+      ...(context.signal ? { signal: context.signal } : {}),
+      ...(context.onOutput ? { onOutput: context.onOutput } : {}),
+    })
+    const output = result.output
+
+    if (result.cancelled) {
+      return { content: withOutput('Dibatalkan: perintah dihentikan oleh pengguna sebelum selesai.', output), isError: true }
+    }
+    if (result.spawnError) {
+      return { content: `Gagal menjalankan ${shell.file}: ${result.spawnError}`, isError: true }
+    }
+    if (result.timedOut) {
       return {
-        content: `Perintah gagal (exit ${failure.code ?? '?'}):\n${output || failure.message}`.slice(0, MAX_OUTPUT),
+        content: withOutput(
+          `Waktu habis: perintah dihentikan setelah ${seconds} detik. Naikkan timeout bila memang lama, atau jalankan dengan run_in_background bila perintah ini tidak pernah selesai sendiri.`,
+          output,
+        ),
         isError: true,
       }
     }
+    if (result.exitCode !== 0) {
+      return { content: `Perintah gagal (exit ${result.exitCode ?? '?'}):\n${output || '(tanpa keluaran)'}`, isError: true }
+    }
+    return { content: output || '(tanpa keluaran)' }
   },
+}
+
+function withOutput(message: string, output: string): string {
+  return output ? `${message}\nKeluaran sejauh ini:\n${output}` : message
 }

@@ -14,6 +14,8 @@ export interface ToolContext {
   workspace: string
   /** Menyala saat pengguna menghentikan pekerjaan; tool yang lama harus berhenti. */
   signal?: AbortSignal
+  /** Menerima keluaran yang mengalir selagi tool berjalan, untuk ditampilkan langsung. */
+  onOutput?: (chunk: string) => void
 }
 
 export interface ToolResult {

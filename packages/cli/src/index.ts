@@ -28,7 +28,7 @@ import {
   type RepairResult,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
-import { describeArgs, ToolCallProgress, toolActivity, turnActivity } from './activity.ts'
+import { describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from './activity.ts'
 import { commandBody, describeRequest, diffBody, renderPanel } from './approval.ts'
 import { MarkdownRenderer } from './markdown.ts'
 import { select } from './select.ts'
@@ -980,6 +980,8 @@ async function main() {
       tally.reset()
       // Keterangan tool dicatat saat mulai; event tool-end hanya membawa nama.
       const previews = new Map<string, string>()
+      // Ekor keluaran perintah yang sedang berjalan, per pemanggilan tool.
+      const outputs = new Map<string, string>()
       // Jawaban dirender per baris lengkap. Selama baris belum lengkap tidak ada
       // yang tampil, jadi spinner menandakan Boo masih menulis.
       let answer: MarkdownRenderer | null = null
@@ -1073,7 +1075,17 @@ async function main() {
             break
           }
 
+          case 'tool-output': {
+            // Baris terakhir keluaran perintah tampil di baris status selagi berjalan.
+            const output = ((outputs.get(event.callId) ?? '') + event.chunk).slice(-4_000)
+            outputs.set(event.callId, output)
+            const line = lastOutputLine(output)
+            if (line) status.activity(toolActivity(event.name), line)
+            break
+          }
+
           case 'tool-end': {
+            outputs.delete(event.callId)
             // Event cancelled menyusul dan menutup tampilannya sendiri.
             if (event.cancelled) {
               status.discardEmpty()

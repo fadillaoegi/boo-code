@@ -60,7 +60,7 @@ export function describeRequest(tool: string, args: Record<string, unknown>, fil
     case 'edit_file':
       return { kind: 'edit', title: 'Ubah berkas', subject: path, question: `Terapkan perubahan ke ${path}?`, allowAlways: 'Ya, izinkan semua perubahan berkas di sesi ini' }
     case 'bash':
-      return { kind: 'command', title: 'Jalankan perintah', subject: typeof args.description === 'string' ? args.description : '', question: 'Jalankan perintah ini?', allowAlways: 'Ya, jangan tanya lagi untuk perintah ini di sesi ini' }
+      return { kind: 'command', title: args.run_in_background ? 'Jalankan perintah di latar belakang' : 'Jalankan perintah', subject: typeof args.description === 'string' ? args.description : '', question: 'Jalankan perintah ini?', allowAlways: 'Ya, jangan tanya lagi untuk perintah ini di sesi ini' }
     default:
       return { kind: 'other', title: `Izin ${tool}`, subject: path, question: `Izinkan ${tool}?`, allowAlways: `Ya, jangan tanya lagi untuk ${tool} di sesi ini` }
   }

@@ -24,6 +24,8 @@ export type AgentEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool-call'; index: number; name: string; delta: string }
   | { type: 'tool-start'; name: string; preview: string; callId: string; args: Record<string, unknown> }
+  /** Keluaran yang mengalir selagi tool berjalan, misalnya dari perintah bash. */
+  | { type: 'tool-output'; name: string; callId: string; chunk: string }
   | { type: 'tool-end'; name: string; callId: string; content: string; isError: boolean; cancelled: boolean }
   | { type: 'tool-denied'; name: string; callId: string; feedback?: string }
   | { type: 'turn-end'; message: Message }
@@ -218,8 +220,39 @@ export class Agent {
         yield { type: 'tool-start', name: tool.name, preview, callId: call.id, args }
         let content: string
         let isError: boolean
+        // Keluaran dari callback ditampung lalu diteruskan sebagai event selagi tool
+        // berjalan; generator tidak bisa yield dari dalam callback.
+        const chunks: string[] = []
+        let wake: (() => void) | null = null
+        let settled = false
+        const running = tool.run(args as never, {
+          workspace: this.options.workspace,
+          signal,
+          onOutput: (chunk) => {
+            chunks.push(chunk)
+            wake?.()
+          },
+        })
+        running.then(() => undefined, () => undefined).finally(() => {
+          settled = true
+          wake?.()
+        })
+        for (;;) {
+          if (chunks.length) {
+            yield { type: 'tool-output', name: tool.name, callId: call.id, chunk: chunks.splice(0).join('') }
+            continue
+          }
+          if (settled) break
+          await new Promise<void>((resolve) => {
+            // Diperiksa ulang di dalam executor, yang berjalan sinkron: keluaran atau
+            // selesainya tool di antara pemeriksaan di atas tidak boleh terlewat.
+            if (settled || chunks.length) resolve()
+            else wake = resolve
+          })
+          wake = null
+        }
         try {
-          const outcome = await tool.run(args as never, { workspace: this.options.workspace, signal })
+          const outcome = await running
           content = outcome.content
           isError = Boolean(outcome.isError)
         } catch (error) {
