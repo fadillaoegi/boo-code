@@ -10,6 +10,7 @@
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
 import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import {
   Agent,
   createDefaultRegistry,
@@ -17,9 +18,11 @@ import {
   diffStats,
   findSelection,
   groupModels,
+  loadInstructions,
   NineRouterProvider,
   resolveInWorkspace,
   type AgentOptions,
+  type InstructionFile,
   type Message,
   type ModelFamily,
   type RepairResult,
@@ -121,13 +124,38 @@ const HELP = `  /model          pilih model dengan tombol panah
   /model <id> [tingkat]
                   ganti langsung, misal /model cx/gpt-5.6-sol xhigh
   /resume         pilih dan lanjutkan sesi lain di direktori ini
+  /init           minta Boo menulis BOO.md berisi aturan proyek ini
   /queue          lihat permintaan yang mengantre
   /queue hapus    kosongkan antrean
   /help           tampilkan bantuan ini
   /keluar         akhiri sesi
 
 Mengetik selagi Boo bekerja tidak memotong pekerjaannya; permintaan
-itu masuk antrean dan dijalankan setelah yang sekarang selesai.`
+itu masuk antrean dan dijalankan setelah yang sekarang selesai.
+Esc atau Ctrl-C menghentikan pekerjaan yang sedang berjalan.
+
+Aturan proyek dibaca dari BOO.md (atau AGENTS.md, CLAUDE.md) di workspace
+dan induknya sampai akar repo, serta ~/.boo/BOO.md untuk semua proyek.`
+
+/**
+ * Permintaan di balik /init. Aturan yang baik berisi hal yang tidak bisa ditebak
+ * dari membaca beberapa berkas, bukan ringkasan struktur yang sudah terlihat.
+ */
+const INIT_PROMPT = `Tulis berkas BOO.md di akar workspace berisi aturan proyek untuk agent coding yang bekerja di repo ini.
+
+Selidiki proyeknya lebih dulu: berkas manifest (package.json, pyproject.toml, go.mod, Cargo.toml, dan sejenisnya), konfigurasi lint/format/test, README, dan beberapa berkas kode yang mewakili. Bila sudah ada AGENTS.md, CLAUDE.md, .cursorrules, atau .github/copilot-instructions.md, jadikan bahan dan jangan kehilangan isinya. Bila BOO.md sudah ada, perbaiki berkas itu alih-alih menulis ulang dari nol.
+
+Isi yang dibutuhkan, singkat dan konkret:
+- perintah untuk build, test (termasuk menjalankan satu test), lint, dan typecheck;
+- arsitektur tingkat tinggi yang baru terlihat setelah membaca banyak berkas;
+- konvensi yang berbeda dari kebiasaan umum: bahasa komentar, penamaan, pola error, gaya import;
+- hal yang tidak boleh dilakukan atau disentuh.
+
+Jangan tulis hal yang jelas dari struktur folder, saran umum seperti "tulis kode yang bersih", atau informasi yang tidak kamu temukan di repo. Usahakan di bawah 100 baris.`
+
+function describeInstructions(files: readonly InstructionFile[]): string {
+  return files.map((file) => file.label + (file.truncated ? ' (dipotong)' : '')).join(', ')
+}
 
 /**
  * Nama model dan tingkat penalaran yang mudah dibaca, misalnya
@@ -600,6 +628,7 @@ async function main() {
     provider,
     registry: createDefaultRegistry(),
     workspace,
+    instructions: () => loadInstructions({ workspace, home: homedir() }),
     ...(config.BOO_MAX_CONTEXT_TOKENS
       ? { maxContextTokens: Number(config.BOO_MAX_CONTEXT_TOKENS) }
       : {}),
@@ -815,6 +844,7 @@ async function main() {
 
   console.log(`\n${banner()}\n`)
   console.log(`  ${theme.accent('Boo Code')} ${theme.muted(`· ${modelLabel(model, reasoningEffort)} · ${workspace}`)}`)
+  if (agent.instructions.length) console.log(`  ${theme.muted(`aturan proyek: ${describeInstructions(agent.instructions)}`)}`)
   /** Keterangan dan ringkasan sesi yang baru saja dilanjutkan. */
   function showResumed(session: LoadedSession, restored: RepairResult | null): void {
     console.log(`  ${theme.muted(`melanjutkan sesi ${shortId(session.id)} · ${session.messages.length} pesan · ${relativeTime(session.updatedAt)}`)}`)
@@ -941,6 +971,7 @@ async function main() {
       await switchSession()
       continue
     }
+    if (input === '/init') input = INIT_PROMPT
 
     busy = true
     currentRequest = new AbortController()
@@ -1083,6 +1114,12 @@ async function main() {
             status.discardEmpty()
             status.commit()
             emit(`  ${theme.danger('✗')} ${theme.muted('Dibatalkan')}\n`)
+            break
+
+          case 'instructions-reloaded':
+            emit(`  ${theme.muted(event.files.length
+              ? `aturan proyek dimuat ulang: ${describeInstructions(event.files)}`
+              : 'aturan proyek tidak lagi ada; Boo bekerja tanpa aturan proyek')}\n`)
             break
 
           case 'context-trimmed':

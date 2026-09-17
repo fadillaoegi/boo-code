@@ -11,6 +11,7 @@ import type { ToolRegistry } from '../domain/tool.ts'
 import type { NineRouterProvider } from '../provider/nineRouter.ts'
 import { DEFAULT_MAX_CONTEXT_TOKENS, trimToBudget } from './context.ts'
 import { repairHistory, type RepairResult } from './history.ts'
+import { composeSystemPrompt, instructionsSignature, type InstructionFile } from './instructions.ts'
 import { BOO_SYSTEM_PROMPT } from './prompt.ts'
 
 export type AgentEvent =
@@ -29,6 +30,8 @@ export type AgentEvent =
   | { type: 'context-trimmed'; droppedMessages: number; estimatedTokens: number }
   /** Pengguna menghentikan pekerjaan; riwayat sudah dirapikan dan tetap sah. */
   | { type: 'cancelled' }
+  /** Berkas aturan proyek berubah sejak permintaan sebelumnya dan sudah dimuat ulang. */
+  | { type: 'instructions-reloaded'; files: InstructionFile[] }
   | { type: 'error'; message: string }
 
 /** Ditanyakan sebelum tool berisiko dijalankan. */
@@ -70,6 +73,11 @@ export interface AgentOptions {
    */
   onMessage?: (message: Message) => void
   systemPrompt?: string
+  /**
+   * Membaca berkas aturan proyek. Dipanggil saat agent dibuat dan sebelum setiap
+   * permintaan, supaya aturan yang baru diubah langsung berlaku.
+   */
+  instructions?: () => InstructionFile[]
 }
 
 const DEFAULT_MAX_TURNS = 24
@@ -87,18 +95,38 @@ const EMPTY_REPLY_RETRIES = 1
 export class Agent {
   private readonly messages: Message[] = []
   private readonly options: AgentOptions
+  private instructionFiles: InstructionFile[]
 
   /** Hasil perbaikan riwayat yang dipulihkan, atau null untuk sesi baru. */
   readonly restored: RepairResult | null
 
   constructor(options: AgentOptions) {
     this.options = options
+    this.instructionFiles = options.instructions?.() ?? []
     this.messages.push({
       role: 'system',
-      content: options.systemPrompt ?? BOO_SYSTEM_PROMPT,
+      content: composeSystemPrompt(options.systemPrompt ?? BOO_SYSTEM_PROMPT, this.instructionFiles),
     })
     this.restored = options.history?.length ? repairHistory(options.history) : null
     if (this.restored) this.messages.push(...this.restored.messages)
+  }
+
+  /** Aturan proyek yang sedang berlaku. */
+  get instructions(): readonly InstructionFile[] {
+    return this.instructionFiles
+  }
+
+  /** Memuat ulang aturan proyek; mengembalikan true bila isinya berubah. */
+  private reloadInstructions(): boolean {
+    if (!this.options.instructions) return false
+    const files = this.options.instructions()
+    if (instructionsSignature(files) === instructionsSignature(this.instructionFiles)) return false
+    this.instructionFiles = files
+    this.messages[0] = {
+      role: 'system',
+      content: composeSystemPrompt(this.options.systemPrompt ?? BOO_SYSTEM_PROMPT, files),
+    }
+    return true
   }
 
   get history(): readonly Message[] {
@@ -107,6 +135,7 @@ export class Agent {
 
   /** Menjalankan satu permintaan pengguna sampai tuntas. */
   async *send(userInput: string, { signal }: SendOptions = {}): AsyncGenerator<AgentEvent> {
+    if (this.reloadInstructions()) yield { type: 'instructions-reloaded', files: [...this.instructionFiles] }
     this.append({ role: 'user', content: userInput })
     const { provider, registry, maxTurns = DEFAULT_MAX_TURNS } = this.options
 

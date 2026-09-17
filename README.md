@@ -101,6 +101,7 @@ ke bawah.
 | `/model` | pilih model dengan tombol panah |
 | `/model <id> [tingkat]` | ganti langsung, misal `/model cx/gpt-5.6-sol xhigh` |
 | `/resume` | pilih dan lanjutkan sesi lain di direktori ini |
+| `/init` | minta Boo menulis `BOO.md` berisi aturan proyek ini |
 | `/queue` | lihat permintaan yang mengantre |
 | `/queue hapus` | kosongkan antrean |
 | `/help` | daftar perintah |
@@ -426,6 +427,64 @@ Dua batas yang sama dengan tool lain tetap berlaku:
   lewat `path` atau `include`; berkasnya dilewati dan dicatat sebagai *rahasia dilewati*.
 - **Pencarian tidak dapat keluar dari workspace**, termasuk lewat pola seperti
   `../**/*` atau path absolut.
+
+## Aturan proyek: BOO.md
+
+Tulis aturan yang harus selalu diikuti Boo di proyek ini — perintah test, gaya
+kode, hal yang tidak boleh disentuh — ke `BOO.md` di akar repo. Boo membacanya di
+setiap sesi, jadi tidak perlu mengulang penjelasan yang sama:
+
+```markdown
+# Aturan
+
+- Pakai pnpm, bukan npm. Test: `pnpm test`, satu berkas: `node --test <berkas>`.
+- Komentar dalam bahasa Indonesia.
+- Jangan ubah apa pun di `migrations/`.
+```
+
+Tidak mau menulis sendiri? Ketik `/init`: Boo menyelidiki proyeknya lalu menulis
+`BOO.md` (atau memperbaiki yang sudah ada), dengan izinmu seperti berkas lain.
+
+Berkas yang dibaca, dari yang paling umum ke yang paling spesifik:
+
+| Lokasi | Kegunaan |
+|---|---|
+| `~/.boo/BOO.md` | aturan pribadi untuk semua proyek, misal "jawab singkat" |
+| setiap direktori dari akar repo git sampai direktori kerja | aturan repo, lalu aturan per paket di monorepo |
+
+Di setiap direktori hanya satu berkas yang dipakai: `BOO.md`, atau bila tidak ada
+`AGENTS.md`, atau `CLAUDE.md` — repo yang sudah punya aturan untuk Codex atau
+Claude Code langsung terbaca. Bila bertentangan, aturan yang lebih dekat ke
+direktori kerja menang. Di luar repo git, hanya direktori kerja yang dibaca.
+
+Berkas yang dimuat tampil saat Boo dibuka:
+
+```
+  Boo Code · Claude Sonnet 4.6 · ~/proyek/web
+  aturan proyek: ~/.boo/BOO.md, ../../AGENTS.md, BOO.md
+```
+
+Aturan dibaca ulang sebelum setiap permintaan. Mengubah `BOO.md` di tengah sesi —
+sendiri atau lewat Boo — langsung berlaku, dan diberitahukan:
+
+```
+› apa ibu kota Prancis?
+  aturan proyek dimuat ulang: BOO.md
+```
+
+Batasnya:
+
+- **32 KB gabungan.** Aturan masuk ke setiap permintaan dan memakan anggaran
+  konteks; yang melebihi batas dipotong dan ditandai `(dipotong)`.
+- **Tidak bisa melonggarkan izin.** Aturan hanya memengaruhi apa yang dikerjakan
+  model. Persetujuan untuk `write_file`, `edit_file`, dan `bash`, batas workspace,
+  dan larangan membaca file rahasia tetap ditegakkan oleh kode.
+- **Symlink tidak dipercaya.** Berkas aturan yang merupakan symlink ke luar repo
+  atau ke file rahasia (`.env`, kunci) diabaikan. Isi aturan dikirim ke model,
+  jadi repo yang dikloning tidak boleh bisa menyelipkan kunci milikmu ke sana.
+
+Karena aturan dari repo ikut dibaca, periksa `BOO.md`/`AGENTS.md` di repo asing
+sebelum meminta Boo bekerja di sana, sama seperti memeriksa skripnya.
 
 ## Tampilan jawaban
 
