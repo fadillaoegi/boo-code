@@ -8,7 +8,7 @@
 import type { Message } from '../domain/message.ts'
 import type { DiffLine } from '../tools/diff.ts'
 import type { ToolRegistry } from '../domain/tool.ts'
-import type { NineRouterProvider } from '../provider/nineRouter.ts'
+import { ProviderError, type NineRouterProvider } from '../provider/nineRouter.ts'
 import { DEFAULT_MAX_CONTEXT_TOKENS, trimToBudget } from './context.ts'
 import { repairHistory, type RepairResult } from './history.ts'
 import { composeSystemPrompt, instructionsSignature, type InstructionFile } from './instructions.ts'
@@ -34,6 +34,10 @@ export type AgentEvent =
   | { type: 'cancelled' }
   /** Berkas aturan proyek berubah sejak permintaan sebelumnya dan sudah dimuat ulang. */
   | { type: 'instructions-reloaded'; files: InstructionFile[] }
+  /** Panggilan model gagal sementara dan akan diulang setelah jeda. */
+  | { type: 'retry'; attempt: number; maxAttempts: number; delayMs: number; message: string }
+  /** Batas langkah tercapai dan pengguna memilih berhenti. */
+  | { type: 'turn-limit'; turns: number }
   | { type: 'error'; message: string }
 
 /** Ditanyakan sebelum tool berisiko dijalankan. */
@@ -60,8 +64,18 @@ export interface AgentOptions {
   registry: ToolRegistry
   workspace: string
   askPermission: PermissionAsker
-  /** Batas putaran agar model yang tersesat tidak berputar selamanya. */
+  /**
+   * Jumlah putaran sebelum pengguna ditanya apakah pekerjaan dilanjutkan, agar
+   * model yang tersesat tidak berputar selamanya tanpa sepengetahuan pengguna.
+   */
   maxTurns?: number
+  /**
+   * Ditanyakan setiap kali `maxTurns` putaran lagi terlewati. Mengembalikan true
+   * untuk melanjutkan. Tanpa callback ini, pekerjaan berhenti di batas.
+   */
+  onTurnLimit?: (turns: number) => Promise<boolean>
+  /** Jeda sebelum setiap pengulangan panggilan model yang gagal sementara. */
+  retryDelaysMs?: number[]
   /** Anggaran token untuk pesan yang dikirim; riwayat lama dipangkas di atasnya. */
   maxContextTokens?: number
   /**
@@ -82,10 +96,34 @@ export interface AgentOptions {
   instructions?: () => InstructionFile[]
 }
 
-const DEFAULT_MAX_TURNS = 24
+const DEFAULT_MAX_TURNS = 40
+/** Limit dan gangguan 9Router biasanya pulih dalam hitungan detik. */
+export const DEFAULT_RETRY_DELAYS_MS = [2_000, 5_000, 15_000]
 
 export const CANCELLED_TOOL_RESULT = 'Dibatalkan: pengguna menghentikan pekerjaan sebelum tool ini selesai.'
 export const CANCELLED_REPLY = '(Dibatalkan oleh pengguna.)'
+/** Awalan jawaban pengganti saat panggilan model gagal; diikuti pesan error dan `)`. */
+export const FAILED_REPLY_PREFIX = '(Gagal: '
+/** Awalan jawaban pengganti saat pengguna memilih berhenti di batas langkah. */
+export const TURN_LIMIT_REPLY_PREFIX = '(Berhenti setelah '
+
+export function turnLimitReply(turns: number): string {
+  return `${TURN_LIMIT_REPLY_PREFIX}${turns} langkah atas permintaan pengguna; pekerjaan belum tentu selesai.)`
+}
+
+/** Menunggu, tetapi selesai lebih awal bila pengguna menghentikan pekerjaan. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve()
+    const timer = setTimeout(done, ms)
+    function done() {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', done)
+      resolve()
+    }
+    signal?.addEventListener('abort', done, { once: true })
+  })
+}
 
 export interface SendOptions {
   /** Menyala saat pengguna menghentikan pekerjaan, misalnya lewat Esc. */
@@ -141,7 +179,15 @@ export class Agent {
     this.append({ role: 'user', content: userInput })
     const { provider, registry, maxTurns = DEFAULT_MAX_TURNS } = this.options
 
-    for (let turn = 0; turn < maxTurns; turn += 1) {
+    for (let turn = 0; ; turn += 1) {
+      if (turn > 0 && turn % maxTurns === 0) {
+        const proceed = await this.options.onTurnLimit?.(turn) ?? false
+        if (!proceed && !signal?.aborted) {
+          this.settle('', turnLimitReply(turn))
+          yield { type: 'turn-limit', turns: turn }
+          return
+        }
+      }
       if (signal?.aborted) {
         this.settleCancellation('')
         yield { type: 'cancelled' }
@@ -159,7 +205,10 @@ export class Agent {
           yield { type: 'cancelled' }
           return
         }
-        yield { type: 'error', message: error instanceof Error ? error.message : 'Panggilan model gagal.' }
+        const message = error instanceof Error ? error.message : 'Panggilan model gagal.'
+        // Riwayat tetap sah, dan model tahu jawabannya tadi tidak sampai.
+        this.settle(partial.text, `${FAILED_REPLY_PREFIX}${message})`)
+        yield { type: 'error', message }
         return
       }
 
@@ -270,8 +319,6 @@ export class Agent {
         return
       }
     }
-
-    yield { type: 'error', message: `Berhenti setelah ${maxTurns} putaran tanpa jawaban akhir.` }
   }
 
   /**
@@ -283,6 +330,11 @@ export class Agent {
    * Teks jawaban yang sudah terlanjur tampil disimpan beserta tanda dibatalkan.
    */
   private settleCancellation(partialText: string): void {
+    this.settle(partialText, CANCELLED_REPLY)
+  }
+
+  /** Melengkapi hasil tool yang hilang dan menutup giliran dengan tanda `marker`. */
+  private settle(partialText: string, marker: string): void {
     const lastAssistant = [...this.messages].reverse().find((message) => message.role === 'assistant')
     for (const call of lastAssistant?.tool_calls ?? []) {
       const answered = this.messages.some((message) => message.role === 'tool' && message.tool_call_id === call.id)
@@ -291,7 +343,7 @@ export class Agent {
     const last = this.messages.at(-1)
     if (last?.role === 'assistant' && !last.tool_calls?.length) return
     const text = partialText.trim()
-    this.append({ role: 'assistant', content: text ? `${text}\n\n${CANCELLED_REPLY}` : CANCELLED_REPLY })
+    this.append({ role: 'assistant', content: text ? `${text}\n\n${marker}` : marker })
   }
 
   /** Meneruskan event streaming dan mengulang sekali bila balasannya kosong. */
@@ -314,16 +366,31 @@ export class Agent {
           estimatedTokens: trimmed.estimatedTokens,
         } as AgentEvent
       }
-      const stream = provider.stream(trimmed.messages, registry.schemas(), signal)
-      partial.text = ''
-      let next = await stream.next()
-      while (!next.done) {
-        if (next.value.type === 'text') partial.text += next.value.delta
-        yield next.value as AgentEvent
-        next = await stream.next()
+      const delays = this.options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS
+      let result
+      for (let retry = 0; ; retry += 1) {
+        const stream = provider.stream(trimmed.messages, registry.schemas(), signal)
+        partial.text = ''
+        try {
+          let next = await stream.next()
+          while (!next.done) {
+            if (next.value.type === 'text') partial.text += next.value.delta
+            yield next.value as AgentEvent
+            next = await stream.next()
+          }
+          result = next.value
+          break
+        } catch (error) {
+          const transient = error instanceof ProviderError && error.retryable
+          if (!transient || retry >= delays.length || signal?.aborted) throw error
+          // Jeda dari 9Router dihormati, ditambah sedikit agar tidak tepat di batasnya.
+          const delayMs = error.retryAfterMs !== undefined ? error.retryAfterMs + 500 : delays[retry]
+          yield { type: 'retry', attempt: retry + 1, maxAttempts: delays.length, delayMs, message: error.message } as AgentEvent
+          await sleep(delayMs, signal)
+          if (signal?.aborted) throw error
+        }
       }
 
-      const result = next.value
       const empty = !result.message.content?.trim() && !result.message.tool_calls?.length
       if (!empty || attempt >= EMPTY_REPLY_RETRIES || signal?.aborted) return result
     }

@@ -60,7 +60,7 @@ Dibaca berlapis; yang belakangan menimpa yang sebelumnya:
 | environment variable | selalu menang |
 
 Hanya kunci milik Boo yang diambil (`NINEROUTER_URL`, `NINEROUTER_KEY`,
-`BOO_MODEL`, `BOO_EFFORT`, `BOO_MAX_CONTEXT_TOKENS`). Berkas `.env` proyek lazim memuat rahasia
+`BOO_MODEL`, `BOO_EFFORT`, `BOO_MAX_CONTEXT_TOKENS`, `BOO_MAX_TURNS`). Berkas `.env` proyek lazim memuat rahasia
 aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
 
 ### Bendera baris perintah
@@ -525,6 +525,53 @@ Syntax highlighting mengenali keluarga C (JS, TS, Go, Rust, Java, …), Python, 
 SQL, JSON/YAML, dan diff. Ia sengaja ringan — dipecah dengan ekspresi reguler, bukan
 parser — karena tujuannya membuat kode mudah dipindai, dan pustaka highlighter
 lengkap terlalu mahal untuk CLI yang dijalankan berkali-kali.
+
+## Saat 9Router bermasalah
+
+Limit model, 9Router yang sibuk, atau koneksi yang putus sebentar tidak lagi
+menghentikan pekerjaan. Panggilan diulang otomatis sampai tiga kali:
+
+```
+› halo
+  ↻ [antigravity/claude-sonnet-4-6] [429]: Resource exhausted (reset after 2s) · mencoba lagi dalam 3s (1/3)
+
+  Jawaban setelah pulih.
+```
+
+| Keadaan | Diulang? | Jeda |
+|---|---|---|
+| limit (429), 9Router/provider sibuk (500, 502, 503, 504, 529) | ya | sesuai `reset after Ns` dari 9Router, atau 2s, 5s, 15s |
+| koneksi putus, atau tidak ada data sama sekali selama 120 detik | ya | 2s, 5s, 15s |
+| permintaan salah (400), kunci salah (401/403), model tidak ada (404) | tidak | — |
+| limit dengan jeda lebih dari 60 detik | tidak | — |
+
+9Router menambahkan `(reset after Ns)` pada error **apa pun**, termasuk
+permintaan yang memang salah, jadi keputusan mengulang diambil dari status
+provider di dalam pesannya (`[429]`), bukan dari ada-tidaknya tanda reset.
+Mengulang permintaan yang salah hanya membuang waktu.
+
+Batas waktu 120 detik dihitung sejak data terakhir diterima, bukan sejak
+permintaan dimulai: jawaban panjang yang terus mengalir tidak pernah diputus.
+Esc tetap bekerja selama menunggu jeda.
+
+Bila tetap gagal, error ditampilkan dan dicatat di riwayat sebagai jawaban yang
+gagal. Model tahu jawabannya tadi tidak sampai, dan pertanyaan berikutnya tidak
+ditolak.
+
+## Batas langkah
+
+Satu permintaan bisa memakan banyak langkah: membaca, mengubah, menjalankan test,
+memperbaiki. Setiap 40 langkah Boo bertanya:
+
+```
+  ● Exploring     12 files, 4 searches  38.1s
+  Boo sudah 40 langkah mengerjakan permintaan ini. Lanjutkan?
+ > 1. Ya, lanjutkan
+   2. Tidak, berhenti di sini
+```
+
+Memilih berhenti menutup pekerjaan dengan riwayat yang sah; ketik "lanjutkan" untuk
+meneruskannya nanti. Batasnya dapat diubah dengan `BOO_MAX_TURNS`.
 
 ## Batas konteks
 

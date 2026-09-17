@@ -24,6 +24,7 @@ const BOO_KEYS = [
   'BOO_MODEL',
   'BOO_EFFORT',
   'BOO_MAX_CONTEXT_TOKENS',
+  'BOO_MAX_TURNS',
 ] as const
 
 export type BooKey = (typeof BOO_KEYS)[number]

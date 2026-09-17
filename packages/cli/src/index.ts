@@ -625,10 +625,31 @@ async function main() {
   }
 
   const agentOptions: Omit<AgentOptions, 'history' | 'onMessage'> = {
+    async onTurnLimit(turns) {
+      stopTyping(true)
+      // Pekerjaan sejauh ini dibekukan dulu, agar pertanyaannya tampil sesudahnya.
+      status.commit()
+      if (midLine) emit('\n')
+      const question = `Boo sudah ${turns} langkah mengerjakan permintaan ini. Lanjutkan?`
+      const choice = await select(readline, {
+        title: question,
+        items: ['Ya, lanjutkan', 'Tidak, berhenti di sini'],
+        initialIndex: 0,
+        numbered: true,
+        hint: 'panah memilih · enter memakai · esc berhenti',
+      })
+      const proceed = choice === undefined
+        // Terminal tanpa raw mode: jawaban kosong berarti lanjut.
+        ? (await ask(`  ${question} [Y/n] `))?.trim().toLowerCase() !== 'n'
+        : choice === 0
+      recordDecision(proceed, proceed ? `lanjut setelah ${turns} langkah` : `berhenti setelah ${turns} langkah`)
+      return proceed
+    },
     provider,
     registry: createDefaultRegistry(),
     workspace,
     instructions: () => loadInstructions({ workspace, home: homedir() }),
+    ...(Number(config.BOO_MAX_TURNS) > 0 ? { maxTurns: Number(config.BOO_MAX_TURNS) } : {}),
     ...(config.BOO_MAX_CONTEXT_TOKENS
       ? { maxContextTokens: Number(config.BOO_MAX_CONTEXT_TOKENS) }
       : {}),
@@ -1132,6 +1153,24 @@ async function main() {
             emit(`  ${theme.muted(event.files.length
               ? `aturan proyek dimuat ulang: ${describeInstructions(event.files)}`
               : 'aturan proyek tidak lagi ada; Boo bekerja tanpa aturan proyek')}\n`)
+            break
+
+          case 'retry': {
+            // Jawaban yang sempat mengalir ditutup; jawaban ulangan tampil di bawahnya.
+            finishAnswer()
+            status.clear()
+            if (midLine) emit('\n')
+            const reason = event.message.split('\n')[0].slice(0, 160)
+            const seconds = Math.ceil(event.delayMs / 1_000)
+            emit(`  ${theme.muted(`↻ ${reason} · mencoba lagi dalam ${seconds}s (${event.attempt}/${event.maxAttempts})`)}\n`)
+            status.activity('Retrying', `percobaan ${event.attempt} dari ${event.maxAttempts}`)
+            break
+          }
+
+          case 'turn-limit':
+            finishAnswer()
+            status.commit()
+            emit(`  ${theme.muted('Ketik "lanjutkan" untuk meneruskan pekerjaannya.')}\n`)
             break
 
           case 'context-trimmed':

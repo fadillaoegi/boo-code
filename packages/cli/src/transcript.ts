@@ -8,7 +8,7 @@
  * sama seperti saat sesi berjalan.
  */
 
-import { CANCELLED_REPLY, type Message } from '@boo/core'
+import { CANCELLED_REPLY, FAILED_REPLY_PREFIX, TURN_LIMIT_REPLY_PREFIX, type Message } from '@boo/core'
 import { MarkdownRenderer } from './markdown.ts'
 import { PhaseTally, phaseLine, phaseOf, type Phase } from './status.ts'
 import { theme } from './theme.ts'
@@ -56,6 +56,26 @@ function denialLine(call: PendingCall, content: string): string {
   return `  ${theme.danger('✗')} ${theme.muted(`${title}${target} · ditolak${feedback ? `: ${feedback}` : ''}`)}\n`
 }
 
+/**
+ * Jawaban pengganti yang ditulis agent — dibatalkan, gagal, berhenti di batas
+ * langkah — ditampilkan sebagai baris status seperti saat sesi berjalan, bukan
+ * sebagai teks jawaban.
+ */
+function splitMarker(content: string): { text: string; line: string } {
+  const at = content.lastIndexOf('\n\n')
+  const text = at === -1 ? '' : content.slice(0, at)
+  const tail = at === -1 ? content : content.slice(at + 2)
+  if (tail === CANCELLED_REPLY) return { text, line: `  ${theme.danger('✗')} ${theme.muted('Dibatalkan')}\n` }
+  if (tail.startsWith(FAILED_REPLY_PREFIX) && tail.endsWith(')')) {
+    return { text, line: `\n  ${theme.danger('error')} ${tail.slice(FAILED_REPLY_PREFIX.length, -1)}\n` }
+  }
+  if (tail.startsWith(TURN_LIMIT_REPLY_PREFIX)) {
+    const turns = /^\(Berhenti setelah (\d+)/.exec(tail)?.[1] ?? '?'
+    return { text, line: `  ${theme.danger('✗')} ${theme.muted(`berhenti setelah ${turns} langkah`)}\n` }
+  }
+  return { text: content, line: '' }
+}
+
 function renderExchange(exchange: Message[], width: number): string {
   let output = ''
   const tally = new PhaseTally()
@@ -78,17 +98,13 @@ function renderExchange(exchange: Message[], width: number): string {
     }
 
     if (message.role === 'assistant') {
-      const content = message.content ?? ''
-      // Jawaban yang dihentikan disimpan dengan tanda di ujungnya; tanda itu
-      // ditampilkan sebagai baris pembatalan, sama seperti saat sesi berjalan.
-      const cancelled = content.endsWith(CANCELLED_REPLY)
-      const text = cancelled ? content.slice(0, -CANCELLED_REPLY.length) : content
-      if (text.trim() || cancelled) flushPhase()
+      const { text, line } = splitMarker(message.content ?? '')
+      if (text.trim() || line) flushPhase()
       if (text.trim()) {
         const renderer = new MarkdownRenderer({ width })
         output += `\n${renderer.push(text.trimEnd())}${renderer.end()}`
       }
-      if (cancelled) output += `  ${theme.danger('✗')} ${theme.muted('Dibatalkan')}\n`
+      output += line
       for (const call of message.tool_calls ?? []) {
         calls.set(call.id, { name: call.function.name, args: parseArgs(call.function.arguments) })
       }

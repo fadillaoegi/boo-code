@@ -89,6 +89,54 @@ function errorMessage(rawBody: string, status: number): string {
   }
 }
 
+/** Status yang biasanya pulih sendiri: limit, dan gangguan di sisi server. */
+const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504, 529])
+/** Jeda dari 9Router lebih lama dari ini tidak ditunggu otomatis. */
+const MAX_RETRY_AFTER_MS = 60_000
+
+/**
+ * Kegagalan memanggil model, beserta apakah layak diulang.
+ *
+ * 9Router membungkus error provider di pesannya — `[codex/gpt-5.6] [429]: …` —
+ * dan menambahkan `(reset after 20s)` pada error apa pun, termasuk permintaan
+ * yang memang salah. Karena itu keputusan mengulang diambil dari status, bukan
+ * dari ada-tidaknya jeda: permintaan 400 yang diulang hanya gagal lagi.
+ */
+export class ProviderError extends Error {
+  readonly status: number | undefined
+  readonly retryable: boolean
+  /** Jeda yang diminta 9Router sebelum model ini dapat dipakai lagi. */
+  readonly retryAfterMs: number | undefined
+
+  constructor(message: string, options: { status?: number; retryable: boolean; retryAfterMs?: number }) {
+    super(message)
+    this.name = 'ProviderError'
+    this.status = options.status
+    this.retryable = options.retryable
+    this.retryAfterMs = options.retryAfterMs
+  }
+}
+
+/** Mengklasifikasikan respons HTTP yang gagal. */
+export function httpError(rawBody: string, status: number): ProviderError {
+  const message = errorMessage(rawBody, status)
+  // Status provider di dalam pesan lebih jujur daripada status HTTP 9Router sendiri.
+  const inner = /\[(\d{3})\]:/.exec(message)
+  const effective = inner ? Number(inner[1]) : status
+  const reset = /reset after (\d+)\s*s/i.exec(message)
+  const retryAfterMs = reset ? Number(reset[1]) * 1_000 : undefined
+  const retryable = TRANSIENT_STATUS.has(effective) && (retryAfterMs === undefined || retryAfterMs <= MAX_RETRY_AFTER_MS)
+  return new ProviderError(message, { status: effective, retryable, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) })
+}
+
+/** Koneksi putus atau tidak ada data sama sekali selama batas waktu: layak diulang. */
+function connectionError(error: unknown, idle: boolean): ProviderError {
+  if (idle) return new ProviderError('9Router tidak mengirim data apa pun terlalu lama.', { retryable: true })
+  const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : ''
+  const detail = error instanceof Error ? error.message : 'error tak dikenal'
+  return new ProviderError(`Koneksi ke 9Router gagal (${detail}${cause}).`, { retryable: true })
+}
+
 export class NineRouterProvider {
   private readonly options: ProviderOptions
 
@@ -140,26 +188,56 @@ export class NineRouterProvider {
     const { baseUrl, apiKey, model, reasoningEffort, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
     const endpoint = new URL('v1/chat/completions', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: true,
-        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-        ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
-      }),
-      // Pembatalan pengguna memutus koneksi seketika; batas waktu tetap berlaku.
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
-    })
+    // Batas waktu dihitung sejak data terakhir, bukan sejak permintaan dimulai:
+    // jawaban panjang yang terus mengalir tidak boleh diputus di tengah jalan.
+    const idle = new AbortController()
+    let idleTimedOut = false
+    let idleTimer: NodeJS.Timeout | undefined
+    const touch = () => {
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        idleTimedOut = true
+        idle.abort()
+      }, timeoutMs)
+    }
+    touch()
+    const requestSignal = signal ? AbortSignal.any([signal, idle.signal]) : idle.signal
+
+    let response: Response
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: true,
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+          ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
+        }),
+        // Pembatalan pengguna memutus koneksi seketika.
+        signal: requestSignal,
+      })
+    } catch (error) {
+      clearTimeout(idleTimer)
+      if (signal?.aborted) throw error
+      throw connectionError(error, idleTimedOut)
+    }
 
     if (!response.ok || !response.body) {
-      throw new Error(errorMessage(await response.text(), response.status))
+      let raw = ''
+      try {
+        raw = await response.text()
+      } catch {
+        // Badan respons ikut terputus; status saja sudah cukup.
+      } finally {
+        clearTimeout(idleTimer)
+      }
+      throw httpError(raw, response.status)
     }
 
     const accumulator = new ToolCallAccumulator()
@@ -173,8 +251,16 @@ export class NineRouterProvider {
 
     try {
       for (;;) {
-        const { done, value } = await reader.read()
+        let chunk: Awaited<ReturnType<typeof reader.read>>
+        try {
+          chunk = await reader.read()
+        } catch (error) {
+          if (signal?.aborted) throw error
+          throw connectionError(error, idleTimedOut)
+        }
+        const { done, value } = chunk
         if (done) break
+        touch()
         buffer += value
 
         // Satu event SSE berakhir pada baris kosong; sisanya menunggu chunk berikutnya.
@@ -194,6 +280,9 @@ export class NineRouterProvider {
           } catch {
             continue
           }
+
+          // Error dari provider dapat datang di tengah aliran, setelah HTTP 200.
+          if (parsed.error) throw httpError(payload, 200)
 
           const choice = parsed.choices?.[0]
           if (!choice) continue
@@ -218,6 +307,7 @@ export class NineRouterProvider {
         }
       }
     } finally {
+      clearTimeout(idleTimer)
       reader.releaseLock()
     }
 
