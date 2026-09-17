@@ -23,6 +23,7 @@ import {
   type ModelFamily,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
+import { describeArgs, ToolCallProgress, toolActivity, turnActivity } from './activity.ts'
 import { MarkdownRenderer } from './markdown.ts'
 import { select } from './select.ts'
 import {
@@ -777,11 +778,43 @@ async function main() {
         answerShown = false
       }
 
-      // Model sudah dipanggil tetapi belum membalas apa pun.
-      status.thinking()
+      // Argumen pemanggilan tool yang sedang digenerate, per indeks, per putaran model.
+      const toolCalls = new Map<number, ToolCallProgress>()
+      let lastToolActivity = ''
 
       for await (const event of agent.send(input)) {
         switch (event.type) {
+          case 'turn-start':
+            toolCalls.clear()
+            lastToolActivity = ''
+            status.activity(turnActivity(event.turn))
+            break
+
+          case 'reasoning':
+            // Model thinking mengirim penalarannya lebih dulu; itu memang berpikir.
+            if (!answer) status.activity('Thinking')
+            break
+
+          case 'tool-call': {
+            // Argumen tool sedang digenerate — untuk write_file ini isi berkasnya.
+            finishAnswer()
+            let progress = toolCalls.get(event.index)
+            if (!progress || progress.name !== event.name) {
+              progress = new ToolCallProgress(event.name)
+              toolCalls.set(event.index, progress)
+            }
+            progress.add(event.delta)
+            const label = toolActivity(event.name)
+            const detail = progress.describe()
+            // Potongan argumen datang sangat rapat; status digambar ulang hanya bila isinya berubah.
+            const key = `${event.index}|${label}|${detail}`
+            if (key !== lastToolActivity) {
+              lastToolActivity = key
+              status.work(phaseOf(event.name), label, detail)
+            }
+            break
+          }
+
           case 'text': {
             if (!answer) {
               status.commit()
@@ -793,7 +826,7 @@ async function main() {
               const pending = answer
               waiting = setTimeout(() => {
                 waiting = null
-                if (answer === pending && pending.hasPending) status.thinking()
+                if (answer === pending && pending.hasPending) status.activity('Generating')
               }, WAITING_INDICATOR_MS)
             }
             break
@@ -802,8 +835,7 @@ async function main() {
           case 'tool-start': {
             finishAnswer()
             previews.set(event.callId, event.preview)
-            const phase = phaseOf(event.name)
-            status.work(phase, event.preview)
+            status.work(phaseOf(event.name), toolActivity(event.name), describeArgs(event.name, event.args))
             break
           }
 
@@ -831,10 +863,8 @@ async function main() {
             // Giliran berikutnya dimulai dengan model berpikir lagi. Kalimat
             // pengantar sebelum pemanggilan tool harus diakhiri dulu: spinner
             // menggambar dengan membersihkan barisnya dan akan menghapus kalimat itu.
-            if (event.message.tool_calls?.length) {
-              finishAnswer()
-              status.thinking()
-            }
+            // Tool dijalankan berikutnya dan menampilkan labelnya sendiri.
+            if (event.message.tool_calls?.length) finishAnswer()
             break
 
           case 'context-trimmed':

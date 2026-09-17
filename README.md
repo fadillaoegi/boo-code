@@ -288,18 +288,38 @@ sudah tersimpan begitu masuk ke riwayat.
 
 ## Tampilan proses
 
-Menampilkan setiap isi berkas dan daftar direktori membuat terminal penuh ratusan
-baris yang hampir tidak pernah dibaca. Boo meringkasnya menjadi tiga fase yang
-mencerminkan apa yang benar-benar dikerjakan agent:
+Selagi Boo bekerja, satu baris hidup menunjukkan apa yang sedang dikerjakan saat
+itu, lengkap dengan waktu berjalannya:
 
-| Fase | Kapan | Tool |
-|---|---|---|
-| **Orchestrating** | model berpikir dan memutuskan langkah | — |
-| **Exploring** | mengumpulkan konteks | `read_file`, `list_dir` |
-| **Applying** | mengubah sesuatu | `write_file`, `edit_file`, `bash` |
+```
+  ⠋ Writing       src/komponen/tombol.tsx · 42 lines  12s
+```
 
-Fase yang berjalan tampil sebagai satu baris hidup dengan spinner, lalu dibekukan
-menjadi ringkasan saat selesai:
+Setiap label berasal dari kejadian nyata di agent, bukan kata yang bergiliran
+untuk hiasan:
+
+| Label | Kapan |
+|---|---|
+| **Thinking** | menunggu jawaban pertama atas permintaan, atau model sedang bernalar |
+| **Orchestrating** | model memutuskan langkah berikutnya setelah hasil tool kembali |
+| **Generating** | model menulis jawaban |
+| **Searching** | `list_dir` menelusuri folder |
+| **Reading** | `read_file` membaca berkas |
+| **Writing** | `write_file` menulis berkas |
+| **Implementing** | `edit_file` mengubah kode yang sudah ada |
+| **Running** | `bash` menjalankan perintah |
+
+Writing dan Implementing tampil sejak model mulai **menggenerate argumen tool**,
+bukan baru saat tool dijalankan. Untuk `write_file` argumen itu adalah isi berkas
+itu sendiri dan dapat mengalir belasan detik; selama itu jumlah baris yang sudah
+selesai ditulis bertambah di baris status.
+
+> Model `ag/*` menerima argumen tool dari 9Router dalam satu potongan utuh, jadi
+> fase itu tidak terlihat dan labelnya baru muncul saat argumennya lengkap. Model
+> `cx/*` mengalirkannya sedikit demi sedikit.
+
+Ketika pekerjaan dalam satu kelompok selesai, baris hidup dibekukan menjadi
+ringkasan:
 
 ```
 boo > Buat bagi() melempar Error kalau pembagi nol, lalu uji.
@@ -308,10 +328,14 @@ boo > Buat bagi() melempar Error kalau pembagi nol, lalu uji.
   * Applying      hitung.js . 1 command  6.0s
 ```
 
-**Orchestrating tidak pernah dibekukan.** Model berpikir di antara setiap
-pemanggilan tool, sehingga membekukannya akan memenuhi layar dengan baris yang
-sama berulang. Penelaahan yang terpotong oleh proses berpikir tetap menyatu dalam
-satu baris.
+Label hidup dan ringkasan sengaja dipisahkan. Membaca berkas lalu menelusuri folder
+tetap menjadi satu ringkasan Exploring walau labelnya berganti di antaranya, dan
+Thinking maupun Orchestrating tidak pernah dibekukan — model berpikir di antara
+setiap pemanggilan tool, sehingga membekukannya akan memenuhi layar dengan baris
+yang sama berulang.
+
+Baris hidup dipotong agar muat selebar terminal. Baris yang terbungkus tidak dapat
+digambar ulang di tempat, dan setiap frame akan meninggalkan sisa di layar.
 
 Kegagalan tool tidak pernah disembunyikan di balik ringkasan. Untuk melihat
 keluaran tool selengkapnya, jalankan dengan `--verbose`.

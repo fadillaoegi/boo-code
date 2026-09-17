@@ -29,6 +29,13 @@ export interface ProviderOptions {
 export type StreamEvent =
   | { type: 'text'; delta: string }
   | { type: 'reasoning'; delta: string }
+  /**
+   * Potongan argumen pemanggilan tool yang sedang digenerate model. Untuk tool
+   * seperti write_file, argumen ini adalah isi berkas itu sendiri dan dapat
+   * mengalir lama sebelum tool dijalankan — tanpa kejadian ini, momen tersebut
+   * tidak terlihat sama sekali.
+   */
+  | { type: 'tool-call'; index: number; name: string; delta: string }
 
 export interface CompletionResult {
   message: Message
@@ -55,6 +62,10 @@ class ToolCallAccumulator {
     if (delta.function?.name) current.name = delta.function.name
     if (delta.function?.arguments) current.args += delta.function.arguments
     this.byIndex.set(index, current)
+  }
+
+  nameOf(index: number): string {
+    return this.byIndex.get(index)?.name ?? ''
   }
 
   toToolCalls(): ToolCall[] {
@@ -195,7 +206,13 @@ export class NineRouterProvider {
             content += delta.content
             yield { type: 'text', delta: delta.content }
           }
-          for (const call of delta?.tool_calls ?? []) accumulator.add(call)
+          for (const call of delta?.tool_calls ?? []) {
+            accumulator.add(call)
+            // Nama tool bisa datang lebih dulu dari argumennya; kejadian baru dikirim
+            // setelah nama diketahui, supaya penerima tahu apa yang sedang digenerate.
+            const name = accumulator.nameOf(call.index ?? 0)
+            if (name) yield { type: 'tool-call', index: call.index ?? 0, name, delta: call.function?.arguments ?? '' }
+          }
         }
       }
     } finally {

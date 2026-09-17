@@ -8,19 +8,20 @@
  * Satu baris digambar ulang di tempat selama sebuah fase berjalan, lalu
  * dibekukan menjadi ringkasan ketika fase berganti.
  *
- * "Orchestrating" tidak pernah dibekukan. Model berpikir di antara setiap
- * pemanggilan tool, sehingga membekukannya akan memenuhi layar dengan baris yang
- * sama berulang-ulang. Ia hanya tampil hidup, lalu digantikan fase berikutnya.
+ * Aktivitas seperti Thinking dan Orchestrating tidak pernah dibekukan. Model
+ * berpikir di antara setiap pemanggilan tool, sehingga membekukannya akan
+ * memenuhi layar dengan baris yang sama berulang-ulang.
  */
 
 import { stdout } from 'node:process'
+import { codePointWidth, visibleWidth } from './text.ts'
 import { theme } from './theme.ts'
 
 /** Tiga fase yang mencerminkan apa yang benar-benar dikerjakan agent. */
-export type Phase = 'orchestrating' | 'exploring' | 'applying'
+/** Kelompok pekerjaan yang dibekukan menjadi baris ringkasan. */
+export type Phase = 'exploring' | 'applying'
 
 export const PHASE_LABEL: Record<Phase, string> = {
-  orchestrating: 'Orchestrating',
   exploring: 'Exploring',
   applying: 'Applying',
 }
@@ -28,17 +29,42 @@ export const PHASE_LABEL: Record<Phase, string> = {
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const FRAME_MS = 80
 const CLEAR_LINE = '\r\u001b[2K'
-const LABEL_WIDTH = 12
+/** Selebar label terpanjang, "Orchestrating", ditambah jarak. */
+const LABEL_WIDTH = 14
+/** Waktu berjalan baru ditampilkan setelah ini, agar aktivitas singkat tidak berisik. */
+const ELAPSED_AFTER_MS = 1_000
 
 function formatDuration(ms: number): string {
   return ms < 1_000 ? `${ms}ms` : `${(ms / 1_000).toFixed(1)}s`
 }
 
+/** Memotong teks biasa agar muat dalam lebar kolom, dengan elipsis bila terpotong. */
+function truncate(text: string, width: number): string {
+  if (width <= 0) return ''
+  if (visibleWidth(text) <= width) return text
+  let used = 0
+  let output = ''
+  for (const character of text) {
+    const size = codePointWidth(character.codePointAt(0) ?? 0)
+    if (used + size > width - 1) break
+    used += size
+    output += character
+  }
+  return `${output}…`
+}
+
 /**
  * Menggambar satu baris status yang diperbarui di tempat.
  *
- * Pada terminal non-TTY penggambaran ulang mustahil, jadi setiap fase dicetak
- * sekali saja saat selesai — keluarannya tetap terbaca di log atau saat dipipe.
+ * Dua hal dipisahkan dengan sengaja:
+ * - label hidup: apa yang sedang dikerjakan saat ini — Thinking, Reading,
+ *   Writing, dan seterusnya. Berganti sesering pekerjaannya berganti.
+ * - fase: kelompok pekerjaan yang dibekukan menjadi baris ringkasan, misalnya
+ *   "Exploring 3 files". Membaca lalu menelusuri folder tetap satu ringkasan,
+ *   walau labelnya berganti di antaranya.
+ *
+ * Pada terminal non-TTY penggambaran ulang mustahil, jadi hanya ringkasan fase
+ * yang dicetak — keluarannya tetap terbaca di log atau saat dipipe.
  */
 export class StatusLine {
   private readonly interactive = Boolean(stdout.isTTY)
@@ -55,59 +81,56 @@ export class StatusLine {
 
   private timer: NodeJS.Timeout | null = null
   private frame = 0
-  /** Fase kerja yang akan dibekukan; orchestrating tidak pernah mengisinya. */
   private phase: Phase | null = null
+  private summary = ''
+  private phaseStartedAt = 0
+  private label: string | null = null
   private detail = ''
-  private startedAt = 0
-  /** Apa yang sedang digambar — bisa berbeda dari fase kerja saat model berpikir. */
-  private showing: Phase | null = null
+  private labelStartedAt = 0
   private live = false
   /** Pengguna sedang mengetik; baris tidak boleh digambar ulang di atas ketikannya. */
   private typing = false
 
-  /** Model sedang berpikir. Tidak mengganti maupun membekukan fase kerja. */
-  thinking(): void {
-    this.showing = 'orchestrating'
-    this.animate()
+  /** Aktivitas yang tidak termasuk fase mana pun, misalnya Thinking atau Generating. */
+  activity(label: string, detail = ''): void {
+    this.show(label, detail)
   }
 
   /**
-   * Menandai pekerjaan nyata. Berpindah antara exploring dan applying membekukan
-   * fase sebelumnya; kembali ke fase yang sama melanjutkannya, sehingga
-   * penelaahan yang terpotong oleh proses berpikir tetap satu baris.
+   * Pekerjaan nyata di dalam sebuah fase. Berpindah fase membekukan fase
+   * sebelumnya; kembali ke fase yang sama melanjutkannya, sehingga penelaahan yang
+   * terpotong oleh proses berpikir tetap satu ringkasan.
    */
-  work(phase: Phase, detail: string): void {
+  work(phase: Phase, label: string, detail: string): void {
     if (this.phase && this.phase !== phase) this.commit()
     if (!this.phase) {
       this.phase = phase
-      this.startedAt = Date.now()
+      this.phaseStartedAt = Date.now()
+      this.summary = ''
     }
-    this.detail = detail
-    this.showing = phase
-    this.animate()
+    this.show(label, detail)
   }
 
-  /** Memperbarui keterangan fase kerja yang sedang berjalan. */
-  update(detail: string): void {
-    if (!this.phase) return
-    this.detail = detail
-    if (this.showing !== 'orchestrating') this.draw()
+  /** Memperbarui ringkasan fase yang akan dibekukan, tanpa mengubah label hidup. */
+  update(summary: string): void {
+    if (this.phase) this.summary = summary
   }
 
-  /** Membekukan fase kerja berjalan menjadi baris ringkasan permanen. */
+  /** Membekukan fase berjalan menjadi baris ringkasan permanen. */
   commit(): void {
     if (!this.phase) {
       this.clear()
       return
     }
-    const duration = formatDuration(Date.now() - this.startedAt)
+    const duration = formatDuration(Date.now() - this.phaseStartedAt)
     const label = PHASE_LABEL[this.phase].padEnd(LABEL_WIDTH)
-    const detail = this.detail
+    const summary = this.summary
     this.stop()
     this.phase = null
-    this.showing = null
+    this.summary = ''
+    this.label = null
     this.detail = ''
-    this.write(`  ${theme.accent('●')} ${theme.bold(label)}${detail}  ${theme.muted(duration)}\n`)
+    this.write(`  ${theme.accent('●')} ${theme.bold(label)}${summary}  ${theme.muted(duration)}\n`)
   }
 
   /**
@@ -128,7 +151,7 @@ export class StatusLine {
     return true
   }
 
-  /** Pengguna selesai mengetik; animasi fase yang masih berjalan dilanjutkan. */
+  /** Pengguna selesai mengetik; animasi yang masih berjalan dilanjutkan. */
   resume(): void {
     if (!this.typing) return
     this.typing = false
@@ -136,7 +159,7 @@ export class StatusLine {
   }
 
   /**
-   * Mencetak catatan sekali jalan tanpa mengganggu fase yang sedang berjalan.
+   * Mencetak catatan sekali jalan tanpa mengganggu aktivitas yang sedang berjalan.
    * Baris hidup dihapus, catatan dicetak, lalu baris hidup digambar ulang.
    */
   note(text: string): void {
@@ -148,7 +171,18 @@ export class StatusLine {
   /** Membuang baris hidup tanpa membekukan apa pun. */
   clear(): void {
     this.stop()
-    this.showing = null
+    this.label = null
+    this.detail = ''
+  }
+
+  private show(label: string, detail: string): void {
+    // Waktu berjalan milik aktivitas; keterangan yang berubah tidak mengulangnya.
+    if (label !== this.label) {
+      this.label = label
+      this.labelStartedAt = Date.now()
+    }
+    this.detail = detail
+    this.animate()
   }
 
   private animate(): void {
@@ -161,10 +195,18 @@ export class StatusLine {
   }
 
   private draw(): void {
-    if (!this.interactive || this.typing || !this.showing) return
-    const label = PHASE_LABEL[this.showing].padEnd(LABEL_WIDTH)
-    const detail = this.showing === 'orchestrating' ? '' : this.detail
-    stdout.write(`${CLEAR_LINE}  ${theme.accent(FRAMES[this.frame])} ${theme.bold(label)}${theme.muted(detail)}`)
+    if (!this.interactive || this.typing || !this.label) return
+    const elapsedMs = Date.now() - this.labelStartedAt
+    const elapsed = elapsedMs >= ELAPSED_AFTER_MS ? `  ${Math.floor(elapsedMs / 1_000)}s` : ''
+    // Baris yang terbungkus tidak dapat digambar ulang: pembersih baris hanya
+    // mengenai baris fisik terakhir, dan sisanya menumpuk di layar setiap frame.
+    const columns = (stdout.columns || 80) - 1
+    const fixed = 4 + LABEL_WIDTH + visibleWidth(elapsed)
+    const detail = truncate(this.detail, columns - fixed)
+    stdout.write(
+      `${CLEAR_LINE}  ${theme.accent(FRAMES[this.frame])} ${theme.bold(this.label.padEnd(LABEL_WIDTH))}`
+      + `${theme.muted(detail)}${theme.muted(elapsed)}`,
+    )
     this.live = true
   }
 

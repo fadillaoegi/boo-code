@@ -14,9 +14,15 @@ import { repairHistory, type RepairResult } from './history.ts'
 import { BOO_SYSTEM_PROMPT } from './prompt.ts'
 
 export type AgentEvent =
+  /**
+   * Model dipanggil. Putaran 0 adalah jawaban awal atas permintaan pengguna;
+   * putaran berikutnya adalah keputusan model setelah menerima hasil tool.
+   */
+  | { type: 'turn-start'; turn: number }
   | { type: 'reasoning'; delta: string }
   | { type: 'text'; delta: string }
-  | { type: 'tool-start'; name: string; preview: string; callId: string }
+  | { type: 'tool-call'; index: number; name: string; delta: string }
+  | { type: 'tool-start'; name: string; preview: string; callId: string; args: Record<string, unknown> }
   | { type: 'tool-end'; name: string; callId: string; content: string; isError: boolean }
   | { type: 'tool-denied'; name: string; callId: string }
   | { type: 'turn-end'; message: Message }
@@ -85,6 +91,7 @@ export class Agent {
     const { provider, registry, maxTurns = DEFAULT_MAX_TURNS } = this.options
 
     for (let turn = 0; turn < maxTurns; turn += 1) {
+      yield { type: 'turn-start', turn }
       let result
       try {
         result = yield* this.streamTurn(provider, registry)
@@ -133,7 +140,7 @@ export class Agent {
           }
         }
 
-        yield { type: 'tool-start', name: tool.name, preview, callId: call.id }
+        yield { type: 'tool-start', name: tool.name, preview, callId: call.id, args }
         let content: string
         let isError: boolean
         try {
