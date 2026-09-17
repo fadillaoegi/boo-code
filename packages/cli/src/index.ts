@@ -46,6 +46,7 @@ import {
   type RepairResult,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
+import { runSetup } from './setup.ts'
 import { describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from './activity.ts'
 import { commandBody, describeRequest, diffBody, renderPanel, undoBody } from './approval.ts'
 import { MarkdownRenderer } from './markdown.ts'
@@ -123,6 +124,7 @@ const USAGE = `${COMMAND} — coding agent oleh FLdev
   ${COMMAND} --model <id>         pilih model untuk sesi ini
   ${COMMAND} --effort <tingkat>   low, medium, high, atau xhigh (model Codex)
   ${COMMAND} --verbose            tampilkan keluaran tool selengkapnya
+  ${COMMAND} setup                siapkan alamat 9Router, kunci API, dan model bawaan
   ${COMMAND} --version            tampilkan versi
   ${COMMAND} --help               tampilkan bantuan ini
 
@@ -381,7 +383,17 @@ async function main() {
   }
 
   const workspace = process.cwd()
-  const config = loadConfig(workspace)
+  let config = loadConfig(workspace)
+  const setupDefaults = () => ({ url: config.NINEROUTER_URL, key: config.NINEROUTER_KEY, model: config.BOO_MODEL })
+  if (process.argv[2] === 'setup') {
+    process.exit(await runSetup(setupDefaults()) ? 0 : 1)
+  }
+  // Pertama kali dijalankan di mesin ini: tawarkan setup, bukan pesan error.
+  if (!config.NINEROUTER_KEY && stdin.isTTY) {
+    console.log(`\n  ${theme.muted('Boo Code belum dikonfigurasi di mesin ini.')}`)
+    if (!await runSetup(setupDefaults())) process.exit(1)
+    config = loadConfig(workspace)
+  }
   const resumed = await resolveResume(resumeRequest(), workspace)
 
   // Urutan prioritas: bendera baris perintah, lalu model terakhir sesi yang

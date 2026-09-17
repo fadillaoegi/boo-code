@@ -8,11 +8,13 @@
     "unlink": "pnpm --filter boo-code unlink --global",
     "lint": "eslint .",
     "test": "node --test packages/*/tests/*.test.ts",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "release": "node scripts/release.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
+    "esbuild": "^0.28.2",
     "eslint": "^10.8.0",
     "globals": "^17.7.0",
     "typescript": "~6.0.2",

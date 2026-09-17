@@ -3,41 +3,71 @@
 Coding agent buatan FLdev. Satu otak (`@boo/core`), dua antarmuka: CLI `boo` hari ini,
 web menyusul. Nama produknya Boo Code; CLI dan web hanyalah dua cara menjalankannya. Model diakses lewat [9Router](http://localhost:20128) sebagai satu pintu.
 
-## Memasang secara global
+## Memasang di mesin lain
+
+Buat paket sekali dari repo ini:
+
+```bash
+pnpm install
+pnpm release
+```
+
+Hasilnya `release/boo-code-0.1.0.tgz`: CLI dan `@boo/core` dibundel menjadi satu
+berkas JavaScript (sekitar 200 KB) tanpa dependency. Salin tarball itu ke mesin
+tujuan — yang cukup punya Node.js 22.12 atau lebih baru — lalu:
+
+```bash
+npm install -g ./boo-code-0.1.0.tgz
+boo-code setup
+```
+
+`setup` menanyakan alamat 9Router, kunci API, dan model bawaan:
+
+```
+  Setup Boo Code
+  Setelan disimpan di ~/.boo/.env dan hanya dapat dibaca akunmu.
+
+  Alamat 9Router [http://localhost:20128]:
+  Kunci API (dari Dashboard 9Router): ***********************************
+  ✓ Terhubung ke 9Router · 23 model tersedia
+  Model bawaan [ag/claude-sonnet-4-6]:
+
+  ✓ Tersimpan. Model dan tingkat penalaran dapat diganti kapan saja dengan /model.
+```
+
+- Kunci diketik tanpa tampil di layar, dan koneksinya diperiksa sebelum disimpan.
+- Isi `~/.boo/.env` yang lain (misalnya `BOO_EFFORT`) dipertahankan; berkasnya
+  dikunci ke izin `600`.
+- Menjalankan `boo-code` pertama kali tanpa setelan langsung membuka setup.
+- Jalankan `boo-code setup` lagi kapan saja untuk mengganti kunci atau alamat;
+  menekan enter memakai nilai yang tersimpan.
+
+Paket ini sudah diuji dipasang ke prefix bersih, dijalankan dengan HOME kosong, dan
+dijalankan di Node 22 maupun 24. `release/boo-code/` berisi isi paketnya bila ingin
+diperiksa sebelum dibagikan. Paket diberi lisensi `UNLICENSED` dan **tidak**
+dipublikasikan ke registry npm; itu keputusan terpisah.
+
+Melepasnya: `npm uninstall -g boo-code`. Sesi dan setelan di `~/.boo` tidak ikut
+terhapus.
+
+## Memasang secara global untuk pengembangan
+
+Di mesin tempat repo ini berada, pasang langsung dari sumber agar setiap perubahan
+kode langsung berlaku tanpa build:
 
 ```bash
 pnpm install
 cd packages/cli && npm link      # binary `boo` dan `boo-code` tersedia global
+boo-code setup
 ```
 
-Lalu buat setelan tetap sekali saja:
-
-```bash
-mkdir -p ~/.boo
-cat > ~/.boo/.env <<'ENV'
-NINEROUTER_URL=http://localhost:20128
-NINEROUTER_KEY=sk-...
-BOO_MODEL=ag/claude-sonnet-4-6
-ENV
-chmod 600 ~/.boo/.env
-```
-
-Setelah itu `boo` dapat dipanggil dari direktori mana pun:
-
-```bash
-cd ~/proyek/apa-saja
-boo                    # atau boo-code
-```
-
-Melepasnya: `npm unlink -g boo-code`.
+Setelah itu `boo-code` dapat dipanggil dari direktori mana pun. Melepasnya:
+`npm unlink -g boo-code`.
 
 > `npm link` dipakai karena direktori bin globalnya biasanya sudah ada di PATH.
 > `pnpm link --global` juga bisa, tetapi memerlukan `pnpm setup` lebih dulu yang
-> mengubah berkas konfigurasi shell.
->
-> Paket ini belum siap `npm publish`: `@boo/core` masih berupa dependency
-> workspace, sehingga pemasangan dari registry memerlukan langkah build yang
-> menyatukannya lebih dulu.
+> mengubah berkas konfigurasi shell. Cara ini membutuhkan Node.js 24, karena
+> sumber TypeScript dijalankan langsung.
 
 ## Menjalankan dari dalam repo
 

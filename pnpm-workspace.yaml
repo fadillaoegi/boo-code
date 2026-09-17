@@ -1,2 +1,5 @@
 packages:
   - 'packages/*'
+allowBuilds:
+  # Postinstall esbuild hanya memeriksa biner platformnya.
+  esbuild: true

@@ -147,7 +147,11 @@ export class StatusLine {
 
   /** Membekukan fase berjalan menjadi baris ringkasan permanen. */
   commit(): void {
-    if (!this.phase) {
+    // Fase yang belum menyelesaikan satu tool pun tidak punya apa-apa untuk dilaporkan.
+    // Ini terjadi saat model menyiapkan beberapa pemanggilan tool sekaligus: fase
+    // berganti-ganti selagi argumennya mengalir, sebelum satu pun dijalankan.
+    if (!this.phase || !this.summary) {
+      this.phase = null
       this.clear()
       return
     }

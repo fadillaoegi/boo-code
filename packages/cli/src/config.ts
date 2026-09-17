@@ -14,9 +14,9 @@
  * aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
  */
 
-import { readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 const BOO_KEYS = [
   'NINEROUTER_URL',
@@ -75,4 +75,33 @@ export function loadConfig(workspace: string): Record<BooKey, string | undefined
   const resolved = {} as Record<BooKey, string | undefined>
   for (const key of BOO_KEYS) resolved[key] = process.env[key] || merged[key]
   return resolved
+}
+
+/**
+ * Menulis setelan ke berkas .env tanpa membuang isi lain: baris kunci yang sudah
+ * ada diganti di tempatnya, yang belum ada ditambahkan di akhir. Berkasnya memuat
+ * kunci API, jadi hanya dapat dibaca pemiliknya.
+ */
+export function updateEnvFile(path: string, values: Partial<Record<BooKey, string>>): void {
+  let lines: string[] = []
+  try {
+    lines = readFileSync(path, 'utf8').split('\n')
+    if (lines.at(-1) === '') lines.pop()
+  } catch {
+    // Berkas belum ada.
+  }
+  const pending = new Map(Object.entries(values).filter(([, value]) => value !== undefined) as [string, string][])
+  lines = lines.map((line) => {
+    const key = line.split('=')[0].trim()
+    if (line.trim().startsWith('#') || !pending.has(key)) return line
+    const value = pending.get(key)!
+    pending.delete(key)
+    return `${key}=${value}`
+  })
+  for (const [key, value] of pending) lines.push(`${key}=${value}`)
+
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  writeFileSync(path, `${lines.join('\n')}\n`, { mode: 0o600 })
+  // Mode pada writeFileSync hanya berlaku untuk berkas baru.
+  chmodSync(path, 0o600)
 }
