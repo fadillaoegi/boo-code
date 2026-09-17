@@ -69,6 +69,7 @@ export const grepTool: Tool<Args> = {
     let truncated = false
 
     for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
+      if (context.signal?.aborted) return { content: 'Dibatalkan: pencarian dihentikan oleh pengguna.', isError: true }
       // Isi berkas rahasia tidak boleh sampai ke model, termasuk lewat pencarian.
       if (isSensitivePath(file.path)) {
         skippedSecrets += 1

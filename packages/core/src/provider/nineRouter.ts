@@ -135,6 +135,7 @@ export class NineRouterProvider {
   async *stream(
     messages: Message[],
     tools: ToolSchema[],
+    signal?: AbortSignal,
   ): AsyncGenerator<StreamEvent, CompletionResult> {
     const { baseUrl, apiKey, model, reasoningEffort, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
     const endpoint = new URL('v1/chat/completions', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
@@ -153,7 +154,8 @@ export class NineRouterProvider {
         ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
         ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
       }),
-      signal: AbortSignal.timeout(timeoutMs),
+      // Pembatalan pengguna memutus koneksi seketika; batas waktu tetap berlaku.
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     })
 
     if (!response.ok || !response.body) {

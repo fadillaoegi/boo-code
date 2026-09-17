@@ -310,11 +310,36 @@ Perbaikan dilaporkan saat sesi dibuka:
   terputus ditandai tidak dijalankan, 1 permintaan terputus ditandai belum dijawab
 ```
 
-### Ctrl-C
+### Menghentikan pekerjaan: Esc dan Ctrl-C
 
-Ctrl-C pertama menutup sesi dengan tertib; bila Boo masih bekerja, pekerjaan itu
-diselesaikan dulu. Ctrl-C kedua keluar seketika. Keduanya aman, karena setiap pesan
-sudah tersimpan begitu masuk ke riwayat.
+Selagi Boo bekerja, baris status menampilkan `esc untuk berhenti`. Menekan **Esc**
+atau **Ctrl-C** menghentikan pekerjaan itu seketika, di titik mana pun:
+
+- saat model masih menulis jawaban — permintaan ke 9Router diputus, teks yang
+  sudah tampil disimpan;
+- saat perintah `bash` berjalan — prosesnya ikut dimatikan (`sleep 30` berhenti
+  dalam sekitar satu detik);
+- saat pencarian `grep` berjalan, atau sebelum tool berikutnya dijalankan — tool
+  yang tersisa tidak dijalankan sama sekali.
+
+```
+› jalankan sleep 30 && echo BANGUN
+  ✓ Jalankan perintah · sleep 30 && echo BANGUN · diizinkan
+  ✗ Dibatalkan
+```
+
+Setelah dihentikan, riwayat tetap sah: setiap tool yang dipanggil diberi hasil
+"Dibatalkan", dan jawaban ditutup dengan tanda dibatalkan. Model tahu apa yang
+tidak jadi dikerjakan, dan pertanyaan berikutnya tidak ditolak. Tanda yang sama
+tampil saat sesi dilanjutkan dengan `boo-code --resume`.
+
+Antrean tidak ikut dibuang. Cara cepat mengoreksi arah Boo: ketik koreksinya
+(masuk antrean), lalu tekan Esc — pekerjaan lama berhenti dan koreksi langsung
+dijalankan.
+
+Saat Boo tidak bekerja, Ctrl-C menutup sesi dengan tertib. Ctrl-C kedua setelah
+pekerjaan dihentikan keluar seketika. Keduanya aman, karena setiap pesan sudah
+tersimpan begitu masuk ke riwayat.
 
 ## Tampilan proses
 

@@ -8,7 +8,7 @@
  * sama seperti saat sesi berjalan.
  */
 
-import type { Message } from '@boo/core'
+import { CANCELLED_REPLY, type Message } from '@boo/core'
 import { MarkdownRenderer } from './markdown.ts'
 import { PhaseTally, phaseLine, phaseOf, type Phase } from './status.ts'
 import { theme } from './theme.ts'
@@ -78,11 +78,17 @@ function renderExchange(exchange: Message[], width: number): string {
     }
 
     if (message.role === 'assistant') {
-      if (message.content?.trim()) {
-        flushPhase()
+      const content = message.content ?? ''
+      // Jawaban yang dihentikan disimpan dengan tanda di ujungnya; tanda itu
+      // ditampilkan sebagai baris pembatalan, sama seperti saat sesi berjalan.
+      const cancelled = content.endsWith(CANCELLED_REPLY)
+      const text = cancelled ? content.slice(0, -CANCELLED_REPLY.length) : content
+      if (text.trim() || cancelled) flushPhase()
+      if (text.trim()) {
         const renderer = new MarkdownRenderer({ width })
-        output += `\n${renderer.push(message.content)}${renderer.end()}`
+        output += `\n${renderer.push(text.trimEnd())}${renderer.end()}`
       }
+      if (cancelled) output += `  ${theme.danger('✗')} ${theme.muted('Dibatalkan')}\n`
       for (const call of message.tool_calls ?? []) {
         calls.set(call.id, { name: call.function.name, args: parseArgs(call.function.arguments) })
       }
@@ -93,6 +99,8 @@ function renderExchange(exchange: Message[], width: number): string {
       const call = calls.get(message.tool_call_id ?? '')
       if (!call) continue
       const content = message.content ?? ''
+      // Tool yang terhenti karena pembatalan tidak dihitung, seperti tampilan langsung.
+      if (content.startsWith('Dibatalkan')) continue
       if (content.startsWith('Ditolak oleh pengguna')) {
         flushPhase()
         output += denialLine(call, content)

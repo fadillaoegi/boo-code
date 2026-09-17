@@ -83,9 +83,12 @@ export class StatusLine {
    * sendiri tetap langsung karena sudah dihentikan selama mengetik.
    */
   private readonly write: (text: string) => void
+  /** Petunjuk redup di ujung baris hidup, misalnya cara menghentikan pekerjaan. */
+  private readonly hint: string
 
-  constructor(write: (text: string) => void = (text) => { stdout.write(text) }) {
+  constructor(write: (text: string) => void = (text) => { stdout.write(text) }, hint = '') {
     this.write = write
+    this.hint = hint
   }
 
   private timer: NodeJS.Timeout | null = null
@@ -227,11 +230,14 @@ export class StatusLine {
     // Baris yang terbungkus tidak dapat digambar ulang: pembersih baris hanya
     // mengenai baris fisik terakhir, dan sisanya menumpuk di layar setiap frame.
     const columns = (stdout.columns || 80) - 1
-    const fixed = 4 + LABEL_WIDTH + visibleWidth(elapsed)
-    const detail = truncate(this.detail, columns - fixed)
+    const hint = this.hint ? `  · ${this.hint}` : ''
+    // Keterangan dipotong lebih dulu; petunjuk hanya dibuang bila layar terlalu sempit.
+    const room = columns - 4 - LABEL_WIDTH - visibleWidth(elapsed)
+    const shownHint = room - visibleWidth(hint) >= 12 ? hint : ''
+    const detail = truncate(this.detail, room - visibleWidth(shownHint))
     stdout.write(
       `${CLEAR_LINE}  ${theme.accent(FRAMES[this.frame])} ${theme.bold(this.label.padEnd(LABEL_WIDTH))}`
-      + `${theme.muted(detail)}${theme.muted(elapsed)}`,
+      + `${theme.muted(detail)}${theme.muted(elapsed)}${theme.muted(shownHint)}`,
     )
     this.live = true
   }

@@ -406,7 +406,23 @@ async function main() {
     status.resume()
   }
 
-  const status = new StatusLine(emit)
+  const status = new StatusLine(emit, 'esc untuk berhenti')
+
+  /** Pekerjaan yang sedang berjalan; dibatalkan oleh Esc atau Ctrl-C. */
+  let currentRequest: AbortController | null = null
+
+  /**
+   * Menghentikan pekerjaan yang sedang berjalan. Koneksi ke model diputus, perintah
+   * shell dihentikan, dan agent merapikan riwayat sehingga permintaan berikutnya
+   * tetap sah. Antrean tidak dikosongkan: mengetik koreksi lalu menekan Esc membuat
+   * koreksi itu langsung dikerjakan.
+   */
+  function cancelWork(): boolean {
+    if (!currentRequest || currentRequest.signal.aborted) return false
+    currentRequest.abort()
+    status.activity('Stopping')
+    return true
+  }
 
   // Dapat diganti oleh /resume; setiap penutup membaca nilai terkini lewat binding ini.
   let recorder = new SessionRecorder({ workspace, model, reasoningEffort, resumeId: resumed?.id })
@@ -423,17 +439,18 @@ async function main() {
   // Ctrl-C pertama menutup sesi dengan tertib; bila Boo masih bekerja, pekerjaan
   // itu diselesaikan dulu. Ctrl-C kedua keluar seketika — aman, karena setiap pesan
   // sudah ditulis ke berkas sesi begitu masuk ke riwayat.
+  // Ctrl-C saat Boo bekerja menghentikan pekerjaannya, seperti Esc. Ctrl-C lagi
+  // selagi berhenti, atau Ctrl-C saat diam, keluar dari sesi. Keluar selalu aman
+  // karena setiap pesan sudah tersimpan begitu masuk ke riwayat.
   let interrupted = false
   readline.on('SIGINT', () => {
-    if (interrupted) {
+    if (busy && cancelWork()) return
+    if (interrupted || busy) {
       status.clear()
       printResumeHint()
       process.exit(130)
     }
     interrupted = true
-    if (busy) {
-      status.note(`  ${theme.muted('menyelesaikan pekerjaan yang sedang berjalan; Ctrl-C lagi untuk keluar sekarang')}`)
-    }
     readline.close()
   })
 
@@ -527,7 +544,12 @@ async function main() {
     // Dipasang di depan pendengar readline, sehingga baris ketik sudah punya
     // tempat sendiri sebelum readline menggemakan huruf pertama.
     stdin.prependListener('keypress', (_: string, key: { name?: string; ctrl?: boolean } = {}) => {
-      if (!busy || typing) return
+      if (!busy) return
+      if (key.name === 'escape') {
+        cancelWork()
+        return
+      }
+      if (typing) return
       if (key.ctrl || key.name === 'return' || key.name === 'enter') return
       typing = true
       status.pause()
@@ -921,6 +943,7 @@ async function main() {
     }
 
     busy = true
+    currentRequest = new AbortController()
     try {
       const tally = new PhaseTally()
       tally.reset()
@@ -958,7 +981,7 @@ async function main() {
       const toolCalls = new Map<number, ToolCallProgress>()
       let lastToolActivity = ''
 
-      for await (const event of agent.send(input)) {
+      for await (const event of agent.send(input, { signal: currentRequest.signal })) {
         switch (event.type) {
           case 'turn-start':
             toolCalls.clear()
@@ -1020,6 +1043,11 @@ async function main() {
           }
 
           case 'tool-end': {
+            // Event cancelled menyusul dan menutup tampilannya sendiri.
+            if (event.cancelled) {
+              status.discardEmpty()
+              break
+            }
             tally.record(event.name, event.isError, targetOf(previews.get(event.callId) ?? ''))
             const phase = phaseOf(event.name)
             status.update(phase === 'exploring' ? tally.exploring() : tally.applying())
@@ -1049,6 +1077,14 @@ async function main() {
             if (event.message.tool_calls?.length) finishAnswer()
             break
 
+          case 'cancelled':
+            finishAnswer()
+            // Pekerjaan yang sempat selesai tetap diringkas; fase kosong dibuang.
+            status.discardEmpty()
+            status.commit()
+            emit(`  ${theme.danger('✗')} ${theme.muted('Dibatalkan')}\n`)
+            break
+
           case 'context-trimmed':
             status.clear()
             if (midLine) emit('\n')
@@ -1074,6 +1110,7 @@ async function main() {
       // Sibuk harus selalu dilepas; bila tersangkut, seluruh ketikan
       // berikutnya akan masuk antrean dan sesi tampak membeku.
       busy = false
+      currentRequest = null
     }
     stdout.write(midLine ? '\n\n' : '\n')
     midLine = false

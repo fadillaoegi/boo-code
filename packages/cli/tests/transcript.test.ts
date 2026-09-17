@@ -105,3 +105,22 @@ test('hasil tool yang berjalan tetap diringkas walau panggilan lain ditolak', ()
   assert.match(output, /✗ Ubah berkas a\.ts · ditolak/)
   assert.match(output, /● Applying\s+b\.ts/)
 })
+
+test('pekerjaan yang dihentikan tampil sebagai baris dibatalkan, bukan kegagalan', async () => {
+  const { CANCELLED_REPLY, CANCELLED_TOOL_RESULT } = await import('@boo/core')
+  const output = screen([
+    { role: 'user', content: 'jalankan sleep' },
+    call('c1', 'bash', { command: 'sleep 30' }),
+    result('c1', 'Dibatalkan: perintah dihentikan oleh pengguna sebelum selesai.'),
+    { role: 'assistant', content: CANCELLED_REPLY },
+    { role: 'user', content: 'jelaskan panjang' },
+    { role: 'assistant', content: `Saya mulai menjelaskan\n\n${CANCELLED_REPLY}` },
+    { role: 'user', content: 'tulis dua' },
+    call('c2', 'write_file', { path: 'a.txt', content: 'a' }),
+    result('c2', CANCELLED_TOOL_RESULT),
+    { role: 'assistant', content: CANCELLED_REPLY },
+  ])
+  assert.equal(output.match(/✗ Dibatalkan\n/g)?.length, 3)
+  assert.match(output, /Saya mulai menjelaskan\n\s*✗ Dibatalkan/)
+  assert.doesNotMatch(output, /Applying|failed|\(Dibatalkan oleh pengguna\.\)/)
+})

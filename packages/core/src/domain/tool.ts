@@ -12,6 +12,8 @@ export type ToolRisk = 'safe' | 'confirm'
 export interface ToolContext {
   /** Akar ruang kerja. Tool tidak boleh menyentuh apa pun di luar ini. */
   workspace: string
+  /** Menyala saat pengguna menghentikan pekerjaan; tool yang lama harus berhenti. */
+  signal?: AbortSignal
 }
 
 export interface ToolResult {

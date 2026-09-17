@@ -34,10 +34,15 @@ export const bashTool: Tool<Args> = {
         cwd: context.workspace,
         timeout: TIMEOUT_MS,
         maxBuffer: MAX_OUTPUT * 4,
+        // Menghentikan proses perintah, bukan hanya berhenti menunggu hasilnya.
+        signal: context.signal,
       })
       const output = [stdout, stderr].filter(Boolean).join('\n').trim()
       return { content: output.slice(0, MAX_OUTPUT) || '(tanpa keluaran)' }
     } catch (error) {
+      if (context.signal?.aborted) {
+        return { content: 'Dibatalkan: perintah dihentikan oleh pengguna sebelum selesai.', isError: true }
+      }
       const failure = error as { stdout?: string; stderr?: string; message?: string; code?: number }
       const output = [failure.stdout, failure.stderr].filter(Boolean).join('\n').trim()
       return {
