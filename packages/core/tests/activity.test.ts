@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { countLines, describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from '../src/activity.ts'
+import { countLines, describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from '../src/presentation/activity.ts'
 
 /** Mengalirkan argumen JSON potong demi potong, seperti dari provider. */
 function stream(name: string, args: object, size: number): ToolCallProgress {

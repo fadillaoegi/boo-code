@@ -13,8 +13,14 @@
  */
 
 import { fixedColor, themedColor } from '@boo/core/design/tokens.ts'
-import { highlightLine, type StyledRun } from './highlight.ts'
+import { highlightLine } from '@boo/core/presentation/highlight.ts'
 import { RESET_STYLE, sgr, type TextStyle } from './theme.ts'
+
+/** Potongan teks bergaya; hasil sorotan sintaks memakai sebagian gayanya. */
+export interface StyledRun {
+  text: string
+  style: TextStyle
+}
 import { codePointWidth, visibleWidth } from './text.ts'
 
 export interface MarkdownOptions {

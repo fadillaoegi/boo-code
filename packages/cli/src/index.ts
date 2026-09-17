@@ -45,9 +45,9 @@ import {
   type ModelFamily,
   type RepairResult,
 } from '@boo/core'
-import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
+import { GLOBAL_CONFIG_PATH, loadConfig } from '@boo/core/config/config.ts'
 import { runSetup } from './setup.ts'
-import { describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from './activity.ts'
+import { describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from '@boo/core/presentation/activity.ts'
 import { commandBody, describeRequest, diffBody, renderPanel, undoBody } from './approval.ts'
 import { MarkdownRenderer } from './markdown.ts'
 import { select } from './select.ts'
@@ -62,7 +62,7 @@ import {
   shortId,
   type LoadedSession,
   type SessionSummary,
-} from './sessions.ts'
+} from '@boo/core/session/sessions.ts'
 import { PhaseTally, phaseOf, StatusLine } from './status.ts'
 import { renderTodos } from './todos.ts'
 import { banner, theme } from './theme.ts'

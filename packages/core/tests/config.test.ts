@@ -3,7 +3,7 @@ import test from 'node:test'
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { updateEnvFile } from '../src/config.ts'
+import { updateEnvFile } from '../src/config/config.ts'
 
 test('setelan baru ditulis ke folder yang dibuat, hanya untuk pemiliknya', () => {
   const path = join(mkdtempSync(join(tmpdir(), 'boo-setelan-')), 'baru', '.env')

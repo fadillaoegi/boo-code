@@ -16,7 +16,10 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { specPromptTitle, splitUndoNote, type Compaction, type Message } from '@boo/core'
+import type { Compaction } from '../agent/compaction.ts'
+import { splitUndoNote } from '../agent/checkpoints.ts'
+import type { Message } from '../domain/message.ts'
+import { specPromptTitle } from '../spec/specs.ts'
 
 export const SESSIONS_DIR = join(homedir(), '.boo', 'sessions')
 

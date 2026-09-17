@@ -4,15 +4,20 @@
  * Bukan parser: satu baris dipecah menjadi komentar, string, angka, dan kata
  * dengan ekspresi reguler. Tujuannya membuat kode lebih mudah dipindai, bukan
  * akurat secara tata bahasa — untuk itu pustaka highlighter lengkap terlalu
- * mahal bagi CLI yang dijalankan berkali-kali.
+ * mahal bagi CLI yang dijalankan berkali-kali. Dipakai CLI dan web.
  */
 
-import { fixedColor } from '@boo/core/design/tokens.ts'
-import type { TextStyle } from './theme.ts'
+import { fixedColor } from '../design/tokens.ts'
 
-export interface StyledRun {
+/** Gaya sorotan; cukup kecil untuk dipetakan ke ANSI di CLI maupun CSS di web. */
+export interface SyntaxStyle {
+  color?: string
+  italic?: boolean
+}
+
+export interface SyntaxRun {
   text: string
-  style: TextStyle
+  style: SyntaxStyle
 }
 
 type Family = 'c' | 'python' | 'shell' | 'sql' | 'data' | 'diff' | 'plain'
@@ -62,7 +67,7 @@ const SQL_KEYWORDS = new Set([
 const DATA_KEYWORDS = new Set(['true', 'false', 'null', 'yes', 'no', 'on', 'off'])
 
 const STYLE = {
-  plain: {} as TextStyle,
+  plain: {} as SyntaxStyle,
   keyword: { color: fixedColor.syntaxKeyword },
   string: { color: fixedColor.syntaxString },
   number: { color: fixedColor.syntaxNumber },
@@ -101,7 +106,7 @@ function keywordsOf(family: Family): Set<string> {
 }
 
 /** Menyorot satu baris kode menurut bahasanya; bahasa tak dikenal tidak disorot. */
-export function highlightLine(line: string, language: string): StyledRun[] {
+export function highlightLine(line: string, language: string): SyntaxRun[] {
   const family = familyOf(language)
   if (family === 'plain') return [{ text: line, style: STYLE.plain }]
 
@@ -124,7 +129,7 @@ export function highlightLine(line: string, language: string): StyledRun[] {
   )
   const keywords = keywordsOf(family)
   const caseInsensitive = family === 'sql'
-  const runs: StyledRun[] = []
+  const runs: SyntaxRun[] = []
   let cursor = 0
 
   for (const match of line.matchAll(token)) {

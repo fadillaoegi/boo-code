@@ -8,7 +8,7 @@ import { join } from 'node:path'
 // Sesi asli pengguna di ~/.boo tidak boleh tersentuh oleh tes.
 const fakeHome = mkdtempSync(join(tmpdir(), 'boo-home-'))
 process.env.HOME = fakeHome
-const sessions = await import('../src/sessions.ts')
+const sessions = await import('../src/session/sessions.ts')
 const { SessionRecorder, SessionError, listSessions, loadSession, resolveSessionId, SESSIONS_DIR } = sessions
 
 const WORKSPACE = '/proyek/satu'

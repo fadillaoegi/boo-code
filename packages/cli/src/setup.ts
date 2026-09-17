@@ -9,7 +9,7 @@
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
 import { NineRouterProvider } from '@boo/core'
-import { GLOBAL_CONFIG_PATH, updateEnvFile } from './config.ts'
+import { GLOBAL_CONFIG_PATH, updateEnvFile } from '@boo/core/config/config.ts'
 import { theme } from './theme.ts'
 
 export const DEFAULT_BASE_URL = 'http://localhost:20128'

@@ -5,6 +5,14 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./design/tokens.ts": "./src/design/tokens.ts"
+    "./design/tokens.ts": "./src/design/tokens.ts",
+    "./presentation/activity.ts": "./src/presentation/activity.ts",
+    "./presentation/approval.ts": "./src/presentation/approval.ts",
+    "./presentation/highlight.ts": "./src/presentation/highlight.ts",
+    "./presentation/phases.ts": "./src/presentation/phases.ts",
+    "./session/sessions.ts": "./src/session/sessions.ts",
+    "./config/config.ts": "./src/config/config.ts",
+    "./presentation/transcript.ts": "./src/presentation/transcript.ts",
+    "./presentation/view.ts": "./src/presentation/view.ts"
   }
 }
