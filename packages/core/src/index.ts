@@ -22,6 +22,8 @@ export { INTERRUPTED_REPLY, INTERRUPTED_TOOL_RESULT, repairHistory } from './age
 export type { RepairResult } from './agent/history.ts'
 export { latestTodos, parseTodos, todoProgress } from './tools/todo.ts'
 export type { TodoItem, TodoStatus } from './tools/todo.ts'
+export { applyCompaction, SUMMARY_HEADER } from './agent/compaction.ts'
+export type { Compaction } from './agent/compaction.ts'
 export { DEFAULT_MAX_CONTEXT_TOKENS, estimateMessageTokens, trimToBudget } from './agent/context.ts'
 export type { TrimResult } from './agent/context.ts'
 export {

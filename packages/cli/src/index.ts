@@ -39,6 +39,7 @@ import {
   resolveInWorkspace,
   splitUndoNote,
   type AgentOptions,
+  type Compaction,
   type InstructionFile,
   type Message,
   type ModelFamily,
@@ -147,6 +148,7 @@ const HELP = `  /model          pilih model dengan tombol panah
   /spec <ide>     rancang fitur dulu: requirements, design, tasks
   /spec           lihat spec yang ada dan lanjutkan tahapnya
   /init           minta Boo menulis BOO.md berisi aturan proyek ini
+  /compact        ringkas percakapan sejauh ini agar konteks lega
   /queue          lihat permintaan yang mengantre
   /queue hapus    kosongkan antrean
   /help           tampilkan bantuan ini
@@ -766,10 +768,16 @@ async function main() {
   }
 
   /** Agent dibuat ulang saat berpindah sesi, dengan riwayat sesi yang dipilih. */
-  function createAgent(history: Message[] | undefined): Agent {
-    return new Agent({ ...agentOptions, history, onMessage: (message) => recorder.recordMessage(message) })
+  function createAgent(history: Message[] | undefined, compaction?: Compaction): Agent {
+    return new Agent({
+      ...agentOptions,
+      history,
+      ...(compaction ? { compaction } : {}),
+      onMessage: (message) => recorder.recordMessage(message),
+      onCompaction: (summary) => recorder.recordCompaction(summary),
+    })
   }
-  let agent = createAgent(resumed?.messages)
+  let agent = createAgent(resumed?.messages, resumed?.compaction)
 
   /**
    * Memilih satu item dari daftar dan mengembalikan indeksnya, atau null bila
@@ -1114,7 +1122,7 @@ async function main() {
       reasoningEffort: session.reasoningEffort,
       resumeId: session.id,
     })
-    agent = createAgent(session.messages)
+    agent = createAgent(session.messages, session.compaction)
     if (session.model) {
       provider.model = session.model
       provider.reasoningEffort = validEffort(session.model, session.reasoningEffort)
@@ -1236,7 +1244,12 @@ async function main() {
       const toolCalls = new Map<number, ToolCallProgress>()
       let lastToolActivity = ''
 
-      for await (const event of agent.send(input, { signal: currentRequest.signal })) {
+      // /compact yang tidak menghasilkan kabar apa pun berarti tidak ada yang diringkas.
+      let compactionReported = false
+      const events = input === '/compact'
+        ? agent.compact({ signal: currentRequest.signal })
+        : agent.send(input, { signal: currentRequest.signal })
+      for await (const event of events) {
         switch (event.type) {
           case 'turn-start':
             toolCalls.clear()
@@ -1392,6 +1405,25 @@ async function main() {
             emit(`  ${theme.muted('Ketik "lanjutkan" untuk meneruskan pekerjaannya.')}\n`)
             break
 
+          case 'compacting':
+            finishAnswer()
+            status.activity('Compacting', 'meringkas percakapan lama')
+            break
+
+          case 'compacted':
+            compactionReported = true
+            status.clear()
+            if (midLine) emit('\n')
+            emit(`  ${theme.accent('↻')} ${theme.muted(`konteks diringkas: ${event.summarizedMessages} pesan lama menjadi ringkasan (~${event.estimatedTokens} token terkirim)`)}\n`)
+            break
+
+          case 'compaction-failed':
+            compactionReported = true
+            status.clear()
+            if (midLine) emit('\n')
+            emit(`  ${theme.muted(`ringkasan konteks gagal (${event.message.split('\n')[0].slice(0, 120)}); pesan lama dipangkas`)}\n`)
+            break
+
           case 'context-trimmed':
             status.clear()
             if (midLine) emit('\n')
@@ -1411,6 +1443,9 @@ async function main() {
       }
       finishAnswer()
       status.commit()
+      if (input === '/compact' && !compactionReported && outcome === 'done') {
+        emit(`  ${theme.muted('Belum ada percakapan baru untuk diringkas.')}\n`)
+      }
     } finally {
       // Ketikan yang belum dikirim tetap tersimpan di readline dan akan tampil lagi
       // bersama prompt berikutnya; keluaran yang ditahan dilepas lebih dulu.

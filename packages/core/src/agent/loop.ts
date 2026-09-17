@@ -9,7 +9,16 @@ import type { Message } from '../domain/message.ts'
 import type { DiffLine } from '../tools/diff.ts'
 import type { ToolRegistry } from '../domain/tool.ts'
 import { ProviderError, type NineRouterProvider } from '../provider/nineRouter.ts'
-import { DEFAULT_MAX_CONTEXT_TOKENS, trimToBudget } from './context.ts'
+import {
+  alignCut,
+  applyCompaction,
+  chooseCut,
+  COMPACT_THRESHOLD,
+  renderForSummary,
+  summaryRequest,
+  type Compaction,
+} from './compaction.ts'
+import { DEFAULT_MAX_CONTEXT_TOKENS, estimateMessageTokens, trimToBudget } from './context.ts'
 import { repairHistory, type RepairResult } from './history.ts'
 import { Checkpoints, undoNote, type UndoPlan } from './checkpoints.ts'
 import { composeSystemPrompt, instructionsSignature, type InstructionFile } from './instructions.ts'
@@ -31,6 +40,11 @@ export type AgentEvent =
   | { type: 'tool-denied'; name: string; callId: string; feedback?: string }
   | { type: 'turn-end'; message: Message }
   | { type: 'context-trimmed'; droppedMessages: number; estimatedTokens: number }
+  /** Percakapan lama sedang diringkas oleh model. */
+  | { type: 'compacting' }
+  | { type: 'compacted'; summarizedMessages: number; estimatedTokens: number }
+  /** Ringkasan gagal; pesan lama dipangkas seperti biasa sebagai gantinya. */
+  | { type: 'compaction-failed'; message: string }
   /** Pengguna menghentikan pekerjaan; riwayat sudah dirapikan dan tetap sah. */
   | { type: 'cancelled' }
   /** Berkas aturan proyek berubah sejak permintaan sebelumnya dan sudah dimuat ulang. */
@@ -89,6 +103,10 @@ export interface AgentOptions {
    * Riwayat yang dipulihkan dari `history` tidak ikut dilaporkan.
    */
   onMessage?: (message: Message) => void
+  /** Ringkasan dari sesi yang dilanjutkan, beserta titik potongnya di `history`. */
+  compaction?: Compaction
+  /** Dipanggil setiap kali ringkasan baru dibuat, untuk disimpan bersama sesi. */
+  onCompaction?: (compaction: Compaction) => void
   systemPrompt?: string
   /**
    * Membaca berkas aturan proyek. Dipanggil saat agent dibuat dan sebelum setiap
@@ -137,6 +155,8 @@ export class Agent {
   private readonly messages: Message[] = []
   private readonly options: AgentOptions
   private instructionFiles: InstructionFile[]
+  /** Ringkasan bagian lama riwayat, bila konteks pernah hampir penuh. */
+  private compaction: Compaction | null = null
   /** Titik pemulihan berkas per permintaan, untuk /undo. */
   readonly checkpoints: Checkpoints
   /** Catatan /undo yang disisipkan di awal permintaan berikutnya. */
@@ -155,6 +175,68 @@ export class Agent {
     })
     this.restored = options.history?.length ? repairHistory(options.history) : null
     if (this.restored) this.messages.push(...this.restored.messages)
+    if (options.compaction && this.restored) {
+      // Perbaikan riwayat dapat menyisipkan pesan; titik potong diselaraskan ulang.
+      this.compaction = { summary: options.compaction.summary, upTo: alignCut(this.restored.messages, options.compaction.upTo) }
+    }
+  }
+
+  /** Pesan yang dikirim ke model sebelum pemangkasan: bagian lama diganti ringkasan. */
+  private contextMessages(): Message[] {
+    return [this.messages[0], ...applyCompaction(this.messages.slice(1), this.compaction)]
+  }
+
+  /** Ringkasan yang sedang berlaku, bila ada. */
+  get currentCompaction(): Compaction | null {
+    return this.compaction
+  }
+
+  /**
+   * Meringkas percakapan sekarang juga, misalnya lewat /compact. Seluruh riwayat
+   * sampai saat ini diringkas; permintaan berikutnya dimulai dengan ringkasan itu.
+   */
+  async *compact({ signal }: SendOptions = {}): AsyncGenerator<AgentEvent> {
+    yield* this.summarize(this.messages.length - 1, signal)
+  }
+
+  /** Membuat ringkasan bila pesan yang akan dikirim sudah mendekati batas konteks. */
+  private async *compactIfNeeded(signal: AbortSignal | undefined): AsyncGenerator<AgentEvent> {
+    const budget = this.options.maxContextTokens ?? DEFAULT_MAX_CONTEXT_TOKENS
+    const size = this.contextMessages().reduce((total, message) => total + estimateMessageTokens(message), 0)
+    if (size <= budget * COMPACT_THRESHOLD) return
+    const cut = chooseCut(this.messages.slice(1), this.compaction?.upTo ?? 0, budget)
+    if (cut !== null) yield* this.summarize(cut, signal)
+  }
+
+  private async *summarize(cut: number, signal: AbortSignal | undefined): AsyncGenerator<AgentEvent> {
+    const history = this.messages.slice(1)
+    const from = this.compaction?.upTo ?? 0
+    if (cut <= from) return
+    const budget = this.options.maxContextTokens ?? DEFAULT_MAX_CONTEXT_TOKENS
+    yield { type: 'compacting' }
+
+    // Bahan ringkasan dibatasi sekitar separuh anggaran, agar permintaannya sendiri muat.
+    const transcript = renderForSummary(history.slice(from, cut), Math.floor(budget * 0.5) * 4)
+    let summary: string
+    try {
+      const stream = this.options.provider.stream(summaryRequest(this.compaction?.summary, transcript), [], signal)
+      let next = await stream.next()
+      while (!next.done) next = await stream.next()
+      summary = next.value.message.content?.trim() ?? ''
+    } catch (error) {
+      if (signal?.aborted) throw error
+      yield { type: 'compaction-failed', message: error instanceof Error ? error.message : 'Ringkasan gagal dibuat.' }
+      return
+    }
+    if (!summary) {
+      yield { type: 'compaction-failed', message: 'Model tidak mengembalikan ringkasan.' }
+      return
+    }
+
+    this.compaction = { summary, upTo: cut }
+    this.options.onCompaction?.(this.compaction)
+    const estimatedTokens = this.contextMessages().reduce((total, message) => total + estimateMessageTokens(message), 0)
+    yield { type: 'compacted', summarizedMessages: cut - from, estimatedTokens }
   }
 
   /** Aturan proyek yang sedang berlaku. */
@@ -375,10 +457,11 @@ export class Agent {
     signal: AbortSignal | undefined,
     partial: { text: string },
   ) {
+    if (!signal?.aborted) yield* this.compactIfNeeded(signal)
     for (let attempt = 0; ; attempt += 1) {
       // Riwayat penuh tetap disimpan; yang dipangkas hanya salinan yang dikirim.
       const trimmed = trimToBudget(
-        this.messages,
+        this.contextMessages(),
         this.options.maxContextTokens ?? DEFAULT_MAX_CONTEXT_TOKENS,
       )
       if (trimmed.droppedMessages && attempt === 0) {

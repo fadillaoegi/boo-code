@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { specPromptTitle, splitUndoNote, type Message } from '@boo/core'
+import { specPromptTitle, splitUndoNote, type Compaction, type Message } from '@boo/core'
 
 export const SESSIONS_DIR = join(homedir(), '.boo', 'sessions')
 
@@ -29,6 +29,8 @@ type SessionRecord =
   | { type: 'session'; version: number; id: string; workspace: string; createdAt: number }
   | { type: 'model'; model: string; reasoningEffort?: string }
   | { type: 'message'; message: Message }
+  /** Ringkasan bagian lama; `upTo` dihitung dalam urutan rekaman pesan. */
+  | { type: 'compaction'; summary: string; upTo: number }
 
 export interface SessionSummary {
   id: string
@@ -42,6 +44,8 @@ export interface LoadedSession extends SessionSummary {
   messages: Message[]
   model?: string
   reasoningEffort?: string
+  /** Ringkasan terakhir, bila konteks sesi ini pernah diringkas. */
+  compaction?: Compaction
   /** Baris rusak yang dilewati, biasanya baris terakhir yang terpotong. */
   skippedLines: number
 }
@@ -114,6 +118,11 @@ export class SessionRecorder {
   recordMessage(message: Message): void {
     this.ensureCreated()
     this.write({ type: 'message', message })
+  }
+
+  recordCompaction(compaction: Compaction): void {
+    this.ensureCreated()
+    this.write({ type: 'compaction', summary: compaction.summary, upTo: compaction.upTo })
   }
 
   recordModel(model: string, reasoningEffort: string | undefined): void {
@@ -247,8 +256,10 @@ export function loadSession(idOrPrefix: string): LoadedSession {
   const messages: Message[] = []
   let model: string | undefined
   let reasoningEffort: string | undefined
+  let compaction: Compaction | undefined
   for (const record of records) {
     if (record.type === 'message') messages.push(record.message)
+    else if (record.type === 'compaction') compaction = { summary: record.summary, upTo: record.upTo }
     else if (record.type === 'model') {
       // Rekaman model terakhir yang berlaku: /model di tengah sesi ikut dipulihkan.
       model = record.model
@@ -265,6 +276,7 @@ export function loadSession(idOrPrefix: string): LoadedSession {
     messages,
     model,
     reasoningEffort,
+    ...(compaction ? { compaction } : {}),
     skippedLines: skipped,
   }
 }

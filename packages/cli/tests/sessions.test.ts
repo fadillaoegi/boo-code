@@ -127,3 +127,21 @@ test('melanjutkan sesi yang terpotong tidak merusak rekaman pertama sesudahnya',
   assert.equal(loaded.skippedLines, 1, 'hanya baris yang terpotong yang dilewati')
   assert.deepEqual(loaded.messages.map((m) => m.content), ['sebelum crash', 'pertanyaan pertama setelah crash', 'jawabannya'])
 })
+
+test('ringkasan konteks terakhir dipulihkan bersama sesi', () => {
+  const session = recorder()
+  session.recordMessage({ role: 'user', content: 'satu' })
+  session.recordCompaction({ summary: 'lama', upTo: 1 })
+  session.recordMessage({ role: 'assistant', content: 'dua' })
+  session.recordCompaction({ summary: 'lebih baru', upTo: 2 })
+  const loaded = loadSession(session.id)
+  assert.deepEqual(loaded.compaction, { summary: 'lebih baru', upTo: 2 })
+  assert.equal(loaded.messages.length, 2)
+  assert.equal(loadSession(recorderWithMessage().id).compaction, undefined)
+})
+
+function recorderWithMessage() {
+  const session = recorder()
+  session.recordMessage({ role: 'user', content: 'tanpa ringkasan' })
+  return session
+}

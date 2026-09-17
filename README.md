@@ -117,6 +117,7 @@ Terminal). Tempelan satu baris langsung disisipkan apa adanya.
 | `/resume` | pilih dan lanjutkan sesi lain di direktori ini |
 | `/init` | minta Boo menulis `BOO.md` berisi aturan proyek ini |
 | `/undo` | batalkan perubahan berkas dari permintaan terakhir |
+| `/compact` | ringkas percakapan sejauh ini agar konteks lega |
 | `/spec <ide>` | rancang fitur dulu: requirements, design, tasks, lalu kerjakan |
 | `/spec` | lihat spec di proyek ini dan lanjutkan tahapnya |
 | `/queue` | lihat permintaan yang mengantre |
@@ -611,9 +612,36 @@ Riwayat agent tumbuh jauh lebih cepat daripada chat biasa: satu `read_file`
 menyuntikkan isi file penuh ke percakapan. Tanpa penanganan, sesi panjang akan
 melewati batas konteks model dan gagal.
 
-Sebelum tiap permintaan, riwayat dipangkas ke anggaran token (bawaan 100.000,
-dapat diatur lewat `maxContextTokens`). Riwayat penuh tetap tersimpan di memori —
-yang dipangkas hanya salinan yang dikirim. Saat terjadi, CLI memberi tahu:
+### Ringkasan otomatis
+
+Saat pesan yang akan dikirim melewati 75% anggaran token (bawaan 100.000, atur
+dengan `BOO_MAX_CONTEXT_TOKENS`), bagian lama percakapan **diringkas oleh model**,
+bukan dibuang:
+
+```
+  ↻ konteks diringkas: 4 pesan lama menjadi ringkasan (~719 token terkirim)
+  Kode proyek Anda adalah JERUK-42 dengan tenggat hari Jumat.
+```
+
+Ringkasan memuat permintaan dan instruksimu, keputusan yang diambil, berkas yang
+dibaca atau diubah beserta path-nya, perintah dan hasil pentingnya, serta apa yang
+belum selesai. Ringkasan itu dikirim di depan pesan yang tersisa; Boo tetap ingat
+apa yang disepakati di awal sesi.
+
+- **Dipotong di awal permintaan.** Pesan terbaru yang dipertahankan utuh dipilih
+  sebanyak mungkin, sekitar 35% anggaran, dan selalu mulai dari pertanyaanmu —
+  hasil tool tidak pernah terpisah dari pemanggilnya.
+- **Bertingkat.** Ringkasan berikutnya menggabungkan ringkasan sebelumnya.
+- **Riwayat lengkap tidak berubah.** Sesi tetap menyimpan dan menampilkan
+  seluruh percakapan; yang diringkas hanya salinan yang dikirim ke model.
+  Ringkasan ikut disimpan, jadi `boo-code --resume` langsung memakainya.
+- **`/compact`** meringkas sekarang juga, misalnya sebelum memulai pekerjaan
+  besar berikutnya di sesi yang sama. Esc membatalkannya.
+
+### Pemangkasan sebagai jaring pengaman
+
+Bila ringkasan gagal dibuat, atau satu permintaan saja sudah melebihi anggaran,
+salinan yang dikirim dipangkas. Saat terjadi, CLI memberi tahu:
 
 ```
 konteks dipangkas: 5 pesan lama dibuang (~6000 token terkirim)
