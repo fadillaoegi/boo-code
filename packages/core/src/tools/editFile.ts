@@ -64,7 +64,11 @@ export const editFileTool: Tool<Args> = {
       }
     }
 
-    await writeFile(target, original.replace(args.old_text, args.new_text), 'utf8')
+    await context.checkpoint?.beforeWrite(target)
+    // Pengganti berupa fungsi: string biasa menafsirkan $&, $1, dan $$ di new_text,
+    // sehingga kode seperti `$$` atau template shell berubah diam-diam.
+    await writeFile(target, original.replace(args.old_text, () => args.new_text), 'utf8')
+    await context.checkpoint?.afterWrite(target)
     return { content: `Diubah: ${args.path}` }
   },
 }

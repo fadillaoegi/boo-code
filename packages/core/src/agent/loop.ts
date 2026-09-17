@@ -11,6 +11,7 @@ import type { ToolRegistry } from '../domain/tool.ts'
 import { ProviderError, type NineRouterProvider } from '../provider/nineRouter.ts'
 import { DEFAULT_MAX_CONTEXT_TOKENS, trimToBudget } from './context.ts'
 import { repairHistory, type RepairResult } from './history.ts'
+import { Checkpoints, undoNote, type UndoPlan } from './checkpoints.ts'
 import { composeSystemPrompt, instructionsSignature, type InstructionFile } from './instructions.ts'
 import { BOO_SYSTEM_PROMPT } from './prompt.ts'
 
@@ -136,12 +137,17 @@ export class Agent {
   private readonly messages: Message[] = []
   private readonly options: AgentOptions
   private instructionFiles: InstructionFile[]
+  /** Titik pemulihan berkas per permintaan, untuk /undo. */
+  readonly checkpoints: Checkpoints
+  /** Catatan /undo yang disisipkan di awal permintaan berikutnya. */
+  private pendingNote = ''
 
   /** Hasil perbaikan riwayat yang dipulihkan, atau null untuk sesi baru. */
   readonly restored: RepairResult | null
 
   constructor(options: AgentOptions) {
     this.options = options
+    this.checkpoints = new Checkpoints(options.workspace)
     this.instructionFiles = options.instructions?.() ?? []
     this.messages.push({
       role: 'system',
@@ -169,6 +175,17 @@ export class Agent {
     return true
   }
 
+  /**
+   * Membatalkan perubahan berkas dari permintaan terakhir yang mengubah berkas.
+   * Model diberi tahu pada permintaan berikutnya, karena riwayatnya masih
+   * menyebut perubahan itu sudah dibuat.
+   */
+  async undo(): Promise<UndoPlan | null> {
+    const plan = await this.checkpoints.undo()
+    if (plan?.entries.length) this.pendingNote = [this.pendingNote, undoNote(plan)].filter(Boolean).join('\n')
+    return plan
+  }
+
   get history(): readonly Message[] {
     return this.messages
   }
@@ -176,7 +193,10 @@ export class Agent {
   /** Menjalankan satu permintaan pengguna sampai tuntas. */
   async *send(userInput: string, { signal }: SendOptions = {}): AsyncGenerator<AgentEvent> {
     if (this.reloadInstructions()) yield { type: 'instructions-reloaded', files: [...this.instructionFiles] }
-    this.append({ role: 'user', content: userInput })
+    const note = this.pendingNote
+    this.pendingNote = ''
+    this.append({ role: 'user', content: note ? `${note}\n\n${userInput}` : userInput })
+    this.checkpoints.begin(userInput)
     const { provider, registry, maxTurns = DEFAULT_MAX_TURNS } = this.options
 
     for (let turn = 0; ; turn += 1) {
@@ -274,9 +294,11 @@ export class Agent {
         const chunks: string[] = []
         let wake: (() => void) | null = null
         let settled = false
+        if (tool.name === 'bash') this.checkpoints.noteCommand()
         const running = tool.run(args as never, {
           workspace: this.options.workspace,
           signal,
+          checkpoint: this.checkpoints,
           onOutput: (chunk) => {
             chunks.push(chunk)
             wake?.()

@@ -8,7 +8,7 @@
  * sama seperti saat sesi berjalan.
  */
 
-import { CANCELLED_REPLY, FAILED_REPLY_PREFIX, TURN_LIMIT_REPLY_PREFIX, type Message } from '@boo/core'
+import { CANCELLED_REPLY, FAILED_REPLY_PREFIX, splitUndoNote, TURN_LIMIT_REPLY_PREFIX, type Message } from '@boo/core'
 import { MarkdownRenderer } from './markdown.ts'
 import { PhaseTally, phaseLine, phaseOf, type Phase } from './status.ts'
 import { theme } from './theme.ts'
@@ -92,7 +92,9 @@ function renderExchange(exchange: Message[], width: number): string {
 
   for (const message of exchange) {
     if (message.role === 'user') {
-      const [first, ...rest] = (message.content ?? '').split('\n')
+      const { note, text } = splitUndoNote(message.content ?? '')
+      if (note) output += `  ${theme.accent('↺')} ${theme.muted('perubahan berkas sebelumnya dibatalkan dengan /undo')}\n\n`
+      const [first, ...rest] = text.split('\n')
       output += `${theme.accentBold('›')} ${first}\n${rest.map((line) => `  ${line}\n`).join('')}`
       continue
     }

@@ -21,6 +21,7 @@ import {
   loadInstructions,
   NineRouterProvider,
   resolveInWorkspace,
+  splitUndoNote,
   type AgentOptions,
   type InstructionFile,
   type Message,
@@ -29,7 +30,7 @@ import {
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
 import { describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from './activity.ts'
-import { commandBody, describeRequest, diffBody, renderPanel } from './approval.ts'
+import { commandBody, describeRequest, diffBody, renderPanel, undoBody } from './approval.ts'
 import { MarkdownRenderer } from './markdown.ts'
 import { select } from './select.ts'
 import { DISABLE_BRACKETED_PASTE, ENABLE_BRACKETED_PASTE, interceptPaste, PasteStore } from './paste.ts'
@@ -125,6 +126,7 @@ const HELP = `  /model          pilih model dengan tombol panah
   /model <id> [tingkat]
                   ganti langsung, misal /model cx/gpt-5.6-sol xhigh
   /resume         pilih dan lanjutkan sesi lain di direktori ini
+  /undo           batalkan perubahan berkas dari permintaan terakhir
   /init           minta Boo menulis BOO.md berisi aturan proyek ini
   /queue          lihat permintaan yang mengantre
   /queue hapus    kosongkan antrean
@@ -294,7 +296,7 @@ function sessionLabels(summaries: SessionSummary[]): string[] {
 function promptsOf(messages: Message[]): string[] {
   return messages
     .filter((message) => message.role === 'user' && message.content)
-    .map((message) => message.content as string)
+    .map((message) => splitUndoNote(message.content as string).text)
     .reverse()
 }
 
@@ -894,6 +896,51 @@ async function main() {
    * Berpindah ke sesi lain tanpa keluar dari boo. Sesi yang sedang berjalan sudah
    * tersimpan pesan demi pesan, jadi tidak ada yang hilang saat ditinggalkan.
    */
+  /** Mengembalikan berkas yang diubah Boo pada permintaan terakhir yang mengubah berkas. */
+  async function undoChanges(): Promise<void> {
+    const plan = await agent.checkpoints.plan()
+    if (!plan) {
+      console.log(`  ${theme.muted('Belum ada perubahan berkas oleh Boo di sesi ini yang bisa dibatalkan.')}\n`)
+      return
+    }
+    if (!plan.entries.length) {
+      await agent.undo()
+      console.log(`  ${theme.muted('Berkasnya sudah sama dengan sebelum permintaan itu; tidak ada yang perlu dikembalikan.')}\n`)
+      return
+    }
+
+    const width = Math.max(40, Math.min((stdout.columns || 80) - 2, 100))
+    const prompt = plan.prompt.replace(/\s+/g, ' ')
+    const request = {
+      kind: 'other' as const,
+      title: 'Batalkan perubahan',
+      subject: prompt.length > 70 ? `${prompt.slice(0, 70)}…` : prompt,
+      question: `Kembalikan ${plan.entries.length} berkas?`,
+      allowAlways: '',
+    }
+    const panel = renderPanel(request, undoBody(plan), width)
+    stdout.write(`\n${panel.join('\n')}\n`)
+    const choice = await select(readline, {
+      title: request.question,
+      items: ['Ya, kembalikan', 'Tidak'],
+      initialIndex: 0,
+      numbered: true,
+      hint: 'panah memilih · enter memakai · esc batal',
+    })
+    const confirmed = choice === undefined
+      ? (await ask(`  ${request.question} [y/N] `))?.trim().toLowerCase() === 'y'
+      : choice === 0
+    if (!confirmed) {
+      console.log(`  ${theme.muted('Tidak ada yang dikembalikan.')}\n`)
+      return
+    }
+    const done = await agent.undo()
+    const restored = done?.entries.filter((entry) => entry.action === 'restore').length ?? 0
+    const deleted = done?.entries.filter((entry) => entry.action === 'delete').length ?? 0
+    const parts = [restored ? `${restored} berkas dikembalikan` : '', deleted ? `${deleted} berkas baru dihapus` : ''].filter(Boolean)
+    console.log(`  ${theme.accent('↺')} ${theme.muted(`${parts.join(', ')}. Boo diberi tahu di permintaan berikutnya.`)}\n`)
+  }
+
   async function switchSession(): Promise<void> {
     const summaries = listSessions(workspace)
     if (!summaries.length) {
@@ -998,6 +1045,10 @@ async function main() {
     }
     if (input === '/resume') {
       await switchSession()
+      continue
+    }
+    if (input === '/undo') {
+      await undoChanges()
       continue
     }
     if (input === '/init') input = INIT_PROMPT

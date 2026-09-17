@@ -124,3 +124,14 @@ test('pekerjaan yang dihentikan tampil sebagai baris dibatalkan, bukan kegagalan
   assert.match(output, /Saya mulai menjelaskan\n\s*✗ Dibatalkan/)
   assert.doesNotMatch(output, /Applying|failed|\(Dibatalkan oleh pengguna\.\)/)
 })
+
+test('catatan /undo tampil sebagai baris, bukan bagian pertanyaan', async () => {
+  const { undoNote } = await import('@boo/core')
+  const note = undoNote({ checkpointId: 1, prompt: 'buat a', ranCommands: false, entries: [{ label: 'a.txt', action: 'delete', modifiedSince: false, added: 0, removed: 1 }] })
+  const output = screen([
+    { role: 'user', content: `${note}\n\nlanjut yang lain` },
+    { role: 'assistant', content: 'oke' },
+  ])
+  assert.match(output, /↺ perubahan berkas sebelumnya dibatalkan dengan \/undo\n\n› lanjut yang lain\n/)
+  assert.doesNotMatch(output, /Catatan Boo/)
+})

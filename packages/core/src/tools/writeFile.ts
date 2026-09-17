@@ -43,8 +43,10 @@ export const writeFileTool: Tool<Args> = {
   },
   async run(args, context) {
     const target = resolveInWorkspace(context.workspace, args.path)
+    await context.checkpoint?.beforeWrite(target)
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, args.content, 'utf8')
+    await context.checkpoint?.afterWrite(target)
     return { content: `Tersimpan: ${args.path}` }
   },
 }

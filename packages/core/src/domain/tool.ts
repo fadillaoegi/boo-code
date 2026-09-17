@@ -16,6 +16,11 @@ export interface ToolContext {
   signal?: AbortSignal
   /** Menerima keluaran yang mengalir selagi tool berjalan, untuk ditampilkan langsung. */
   onOutput?: (chunk: string) => void
+  /** Dipanggil sebelum dan sesudah berkas ditulis, agar perubahannya dapat dibatalkan. */
+  checkpoint?: {
+    beforeWrite(absolutePath: string): Promise<void>
+    afterWrite(absolutePath: string): Promise<void>
+  }
 }
 
 export interface ToolResult {

@@ -116,6 +116,7 @@ Terminal). Tempelan satu baris langsung disisipkan apa adanya.
 | `/model <id> [tingkat]` | ganti langsung, misal `/model cx/gpt-5.6-sol xhigh` |
 | `/resume` | pilih dan lanjutkan sesi lain di direktori ini |
 | `/init` | minta Boo menulis `BOO.md` berisi aturan proyek ini |
+| `/undo` | batalkan perubahan berkas dari permintaan terakhir |
 | `/queue` | lihat permintaan yang mengantre |
 | `/queue hapus` | kosongkan antrean |
 | `/help` | daftar perintah |
@@ -691,6 +692,44 @@ Setelah memilih, panel dihapus dan hanya satu baris keputusan yang tersisa:
 Catatan untuk perintah memuat perintahnya sendiri, bukan deskripsi yang ditulis
 model tentang perintah itu. Core meminta izin lewat callback `askPermission`, sehingga
 web nanti dapat memakai mekanisme persetujuan sendiri tanpa mengubah core.
+
+## Membatalkan perubahan: /undo
+
+Setiap permintaan adalah satu titik pemulihan. `/undo` mengembalikan semua berkas
+yang diubah Boo pada permintaan terakhir yang mengubah berkas — ke isi sebelum
+permintaan itu, bukan hanya sebelum edit terakhirnya:
+
+```
+› /undo
+
+  ╭─ Batalkan perubahan ─────────────────────────────────────╮
+  │ Ubah catatan.md: ganti kata asam menjadi segar, lalu…    │
+  │                                                          │
+  │ ↺ kembalikan  catatan.md     +1 -1                       │
+  │ ✗ hapus       docs/resep.md  +0 -1                       │
+  ╰──────────────────────────────────────────────────────────╯
+  ↺ 1 berkas dikembalikan, 1 berkas baru dihapus. Boo diberi tahu di permintaan berikutnya.
+```
+
+- Berkas yang dibuat Boo dihapus, beserta folder yang ikut dibuat untuknya bila
+  sudah kosong.
+- `/undo` berikutnya mundur satu permintaan lagi. Permintaan yang hanya membaca
+  dilewati.
+- Boo diberi tahu di awal permintaan berikutnya berkas mana yang kembali, agar ia
+  membaca ulang alih-alih mengira perubahannya masih ada. Catatan itu tidak tampil
+  sebagai bagian pertanyaanmu.
+
+Batasnya:
+
+- **Perintah bash tidak ikut dibatalkan.** `npm install`, `git checkout`, atau skrip
+  yang mengubah berkas tidak terlihat oleh Boo. Panel memberi peringatan bila
+  permintaan itu menjalankan perintah.
+- **Perubahanmu sendiri ikut hilang.** Berkas yang kamu ubah setelah Boo
+  mengubahnya ditandai `! diubah lagi setelah Boo mengubahnya` sebelum kamu
+  mengonfirmasi.
+- **Hanya selama sesi berjalan.** Titik pemulihan disimpan di memori; setelah Boo
+  ditutup dan sesi dilanjutkan, perubahan lama tidak bisa di-undo. Untuk riwayat
+  jangka panjang, tetap gunakan git.
 
 ## Menjalankan perintah
 

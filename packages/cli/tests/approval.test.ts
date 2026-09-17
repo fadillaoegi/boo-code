@@ -77,3 +77,20 @@ test('panel diakhiri reset agar gaya tidak bocor', () => {
     if (line.includes(`${ESC}[`)) assert.ok(line.endsWith(`${ESC}[0m`))
   }
 })
+
+test('panel undo: aksi per berkas, peringatan perubahan pengguna dan perintah bash', async () => {
+  const { undoBody } = await import('../src/approval.ts')
+  const rows = undoBody({
+    checkpointId: 1,
+    prompt: 'x',
+    ranCommands: true,
+    entries: [
+      { label: 'src/app.ts', action: 'restore', modifiedSince: true, added: 1, removed: 3 },
+      { label: 'baru.ts', action: 'delete', modifiedSince: false, added: 0, removed: 12 },
+    ],
+  }).map((row) => row.map((run) => run.text).join(''))
+  assert.match(rows[0], /^↺ kembalikan {2}src\/app\.ts {2}\+1 -3$/)
+  assert.match(rows[1], /diubah lagi setelah Boo/)
+  assert.match(rows[2], /^✗ hapus {7}baru\.ts {5}\+0 -12$/)
+  assert.match(rows.at(-1)!, /bash .*tidak ikut dibatalkan/)
+})

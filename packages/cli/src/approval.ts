@@ -10,7 +10,7 @@
  * dapat diuji tanpa terminal.
  */
 
-import type { DiffLine } from '@boo/core'
+import type { DiffLine, UndoPlan } from '@boo/core'
 import { fixedColor, themedColor } from '@boo/core/design/tokens.ts'
 import { highlightLine, type StyledRun } from './highlight.ts'
 import { serialize } from './markdown.ts'
@@ -158,6 +158,31 @@ export function diffBody(lines: DiffLine[], path: string, width: number, maxLine
  * Isi perintah shell. Tidak pernah dipotong: bagian perintah yang tersembunyi bisa
  * saja bagian yang berbahaya, jadi perintah panjang dibungkus utuh.
  */
+/** Isi panel /undo: berkas yang dikembalikan atau dihapus, beserta peringatannya. */
+export function undoBody(plan: UndoPlan): StyledRun[][] {
+  const rows: StyledRun[][] = []
+  const labelWidth = Math.max(...plan.entries.map((entry) => visibleWidth(entry.label)))
+  for (const entry of plan.entries) {
+    const action: StyledRun = entry.action === 'restore'
+      ? { text: '↺ kembalikan  ', style: { color: fixedColor.accent } }
+      : { text: '✗ hapus       ', style: { color: fixedColor.removed } }
+    const stats: StyledRun[] = [
+      { text: `+${entry.added}`, style: { color: fixedColor.added } },
+      { text: ' ', style: {} },
+      { text: `-${entry.removed}`, style: { color: fixedColor.removed } },
+    ]
+    rows.push([action, { text: entry.label.padEnd(labelWidth + 2), style: { bold: true } }, ...stats])
+    if (entry.modifiedSince) {
+      rows.push([{ text: '  ! diubah lagi setelah Boo mengubahnya; perubahan itu ikut hilang', style: { color: fixedColor.danger } }])
+    }
+  }
+  if (plan.ranCommands) {
+    rows.push([])
+    rows.push([{ text: 'Perubahan oleh perintah bash di permintaan ini tidak ikut dibatalkan.', style: MUTED }])
+  }
+  return rows
+}
+
 export function commandBody(command: string, width: number): StyledRun[][] {
   const rows: StyledRun[][] = []
   const prompt: StyledRun = { text: '$ ', style: MUTED }
