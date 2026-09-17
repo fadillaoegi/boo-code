@@ -135,3 +135,18 @@ test('catatan /undo tampil sebagai baris, bukan bagian pertanyaan', async () => 
   assert.match(output, /↺ perubahan berkas sebelumnya dibatalkan dengan \/undo\n\n› lanjut yang lain\n/)
   assert.doesNotMatch(output, /Catatan Boo/)
 })
+
+test('daftar tugas tampil utuh di tempatnya, tidak dihitung sebagai perubahan', () => {
+  const output = screen([
+    { role: 'user', content: 'kerjakan tiga hal' },
+    call('t1', 'todo_write', { todos: [{ content: 'Baca kode', status: 'in_progress' }, { content: 'Ubah kode', status: 'pending' }] }),
+    result('t1', 'Daftar tugas diperbarui: 0/2 selesai.'),
+    call('r1', 'read_file', { path: 'a.ts' }),
+    result('r1', 'isi'),
+    call('t2', 'todo_write', { todos: [{ content: 'Baca kode', status: 'completed' }, { content: 'Ubah kode', status: 'in_progress' }] }),
+    result('t2', 'Daftar tugas diperbarui: 1/2 selesai.'),
+    { role: 'assistant', content: 'Selesai.' },
+  ])
+  assert.match(output, /● Plan +0\/2 done\n +◼ Baca kode\n +□ Ubah kode\n +● Exploring +1 file\n +● Plan +1\/2 done\n +✓ Baca kode\n +◼ Ubah kode\n/)
+  assert.doesNotMatch(output, /Applying/)
+})

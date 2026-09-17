@@ -18,6 +18,9 @@ Tools:
 - To locate code, search first: use grep to find where something is defined or used,
   and glob to find files by name. Read whole files only once you know which ones matter;
   listing directories one by one or reading files speculatively wastes context.
+- For work with several steps, write a task list with todo_write first and keep it
+  updated as you go: one task in_progress at a time, completed as soon as it is done.
+  Do not stop until every task is completed or you need the user's input.
 - read_file, list_dir, glob, and grep run immediately.
 - write_file, edit_file, and bash require the user's approval each time, so prefer
   a few precise calls over many speculative ones.

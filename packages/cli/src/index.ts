@@ -19,6 +19,8 @@ import {
   findSelection,
   groupModels,
   loadInstructions,
+  parseTodos,
+  todoProgress,
   NineRouterProvider,
   resolveInWorkspace,
   splitUndoNote,
@@ -46,6 +48,7 @@ import {
   type SessionSummary,
 } from './sessions.ts'
 import { PhaseTally, phaseOf, StatusLine } from './status.ts'
+import { renderTodos } from './todos.ts'
 import { banner, theme } from './theme.ts'
 
 const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
@@ -1060,6 +1063,8 @@ async function main() {
       tally.reset()
       // Keterangan tool dicatat saat mulai; event tool-end hanya membawa nama.
       const previews = new Map<string, string>()
+      // Tugas in_progress dari daftar tugas terakhir, untuk keterangan baris status.
+      let currentTask = ''
       // Ekor keluaran perintah yang sedang berjalan, per pemanggilan tool.
       const outputs = new Map<string, string>()
       // Jawaban dirender per baris lengkap. Selama baris belum lengkap tidak ada
@@ -1099,7 +1104,8 @@ async function main() {
           case 'turn-start':
             toolCalls.clear()
             lastToolActivity = ''
-            status.activity(turnActivity(event.turn))
+            // Tugas yang sedang dikerjakan menemani label berpikir, agar terlihat arahnya.
+            status.activity(turnActivity(event.turn), currentTask)
             break
 
           case 'reasoning':
@@ -1116,6 +1122,11 @@ async function main() {
               toolCalls.set(event.index, progress)
             }
             progress.add(event.delta)
+            // Daftar tugas bukan bagian fase mana pun; ia tampil utuh setelah selesai.
+            if (event.name === 'todo_write') {
+              status.activity('Planning')
+              break
+            }
             const label = toolActivity(event.name)
             const detail = progress.describe()
             // Potongan argumen datang sangat rapat; status digambar ulang hanya bila isinya berubah.
@@ -1150,6 +1161,15 @@ async function main() {
           case 'tool-start': {
             finishAnswer()
             previews.set(event.callId, event.preview)
+            if (event.name === 'todo_write') {
+              const todos = parseTodos(event.args.todos)
+              if (typeof todos !== 'string') {
+                status.commit()
+                emit(renderTodos(todos))
+                currentTask = todoProgress(todos).current ?? ''
+              }
+              break
+            }
             if (status.currentPhase !== phaseOf(event.name)) tally.reset()
             status.work(phaseOf(event.name), toolActivity(event.name), describeArgs(event.name, event.args))
             break
@@ -1166,6 +1186,7 @@ async function main() {
 
           case 'tool-end': {
             outputs.delete(event.callId)
+            if (event.name === 'todo_write' && !event.isError) break
             // Event cancelled menyusul dan menutup tampilannya sendiri.
             if (event.cancelled) {
               status.discardEmpty()

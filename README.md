@@ -636,6 +636,7 @@ lazim saat membaca file raksasa — isinya dipotong, bloknya tidak dibuang.
 | `bash` | konfirmasi | minta izin tiap kali |
 | `bash_output` | aman | membaca keluaran proses latar belakang milik Boo |
 | `bash_kill` | aman | menghentikan proses latar belakang milik Boo |
+| `todo_write` | aman | menulis dan memperbarui daftar tugas |
 
 Setiap tindakan yang mengubah sesuatu ditanyakan lewat panel yang menyebut
 tindakannya dengan bahasa manusia dan menampilkan isinya:
@@ -692,6 +693,27 @@ Setelah memilih, panel dihapus dan hanya satu baris keputusan yang tersisa:
 Catatan untuk perintah memuat perintahnya sendiri, bukan deskripsi yang ditulis
 model tentang perintah itu. Core meminta izin lewat callback `askPermission`, sehingga
 web nanti dapat memakai mekanisme persetujuan sendiri tanpa mengubah core.
+
+## Daftar tugas
+
+Untuk pekerjaan beberapa langkah, Boo menulis rencananya lebih dulu dan
+memperbaruinya setiap kali satu langkah selesai:
+
+```
+  ● Plan          1/4 done
+    ✓ Baca math.js untuk memahami struktur yang ada
+    ◼ Tambahkan fungsi kurang ke math.js
+    □ Buat math.test.js untuk semua fungsi
+    □ Jalankan node --test dan verifikasi hasilnya
+  ● Applying      math.js  4.1s
+```
+
+Tugas yang sedang dikerjakan juga tampil di baris status selagi Boo berpikir,
+jadi arahnya terlihat walau belum ada tool yang berjalan. Hanya satu tugas yang
+boleh berjalan sekaligus; daftar yang melanggar ditolak dan model memperbaikinya.
+
+Daftar dibaca ulang dari riwayat, sehingga tampil sama saat sesi dilanjutkan.
+Permintaan satu langkah tidak memakai daftar tugas.
 
 ## Membatalkan perubahan: /undo
 

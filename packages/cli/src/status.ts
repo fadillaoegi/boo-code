@@ -298,6 +298,8 @@ export class PhaseTally {
       case 'bash_kill':
         this.stopped += 1
         break
+      case 'todo_write':
+        break
       default:
         if (!isError && target && !this.changed.includes(target)) this.changed.push(target)
     }

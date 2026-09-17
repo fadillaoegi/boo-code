@@ -6,9 +6,10 @@ import { globTool } from './glob.ts'
 import { grepTool } from './grep.ts'
 import { listDirTool } from './listDir.ts'
 import { readFileTool } from './readFile.ts'
+import { todoWriteTool } from './todo.ts'
 import { writeFileTool } from './writeFile.ts'
 
-export const defaultTools = [readFileTool, listDirTool, globTool, grepTool, writeFileTool, editFileTool, bashTool, bashOutputTool, bashKillTool]
+export const defaultTools = [readFileTool, listDirTool, globTool, grepTool, writeFileTool, editFileTool, bashTool, bashOutputTool, bashKillTool, todoWriteTool]
 
 export function createDefaultRegistry() {
   return createRegistry(defaultTools as never)

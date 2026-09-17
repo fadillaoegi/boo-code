@@ -8,10 +8,11 @@
  * sama seperti saat sesi berjalan.
  */
 
-import { CANCELLED_REPLY, FAILED_REPLY_PREFIX, splitUndoNote, TURN_LIMIT_REPLY_PREFIX, type Message } from '@boo/core'
+import { CANCELLED_REPLY, FAILED_REPLY_PREFIX, parseTodos, splitUndoNote, TURN_LIMIT_REPLY_PREFIX, type Message } from '@boo/core'
 import { MarkdownRenderer } from './markdown.ts'
 import { PhaseTally, phaseLine, phaseOf, type Phase } from './status.ts'
 import { theme } from './theme.ts'
+import { renderTodos } from './todos.ts'
 
 /** Sesi panjang dibatasi pada tukar-jawab terakhir agar layar tidak banjir. */
 export const MAX_REPLAYED_EXCHANGES = 20
@@ -117,6 +118,14 @@ function renderExchange(exchange: Message[], width: number): string {
       const call = calls.get(message.tool_call_id ?? '')
       if (!call) continue
       const content = message.content ?? ''
+      if (call.name === 'todo_write') {
+        const todos = parseTodos(call.args.todos)
+        if (typeof todos !== 'string' && !content.startsWith('Gagal')) {
+          flushPhase()
+          output += renderTodos(todos)
+        }
+        continue
+      }
       // Tool yang terhenti karena pembatalan tidak dihitung, seperti tampilan langsung.
       if (content.startsWith('Dibatalkan')) continue
       if (content.startsWith('Ditolak oleh pengguna')) {

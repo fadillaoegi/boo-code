@@ -20,5 +20,7 @@ export { composeSystemPrompt, INSTRUCTION_FILENAMES, loadInstructions, MAX_INSTR
 export type { InstructionFile, InstructionSources } from './agent/instructions.ts'
 export { INTERRUPTED_REPLY, INTERRUPTED_TOOL_RESULT, repairHistory } from './agent/history.ts'
 export type { RepairResult } from './agent/history.ts'
+export { latestTodos, parseTodos, todoProgress } from './tools/todo.ts'
+export type { TodoItem, TodoStatus } from './tools/todo.ts'
 export { DEFAULT_MAX_CONTEXT_TOKENS, estimateMessageTokens, trimToBudget } from './agent/context.ts'
 export type { TrimResult } from './agent/context.ts'

@@ -16,6 +16,7 @@ export type ActivityLabel =
   | 'Implementing'
   | 'Running'
   | 'Checking'
+  | 'Planning'
 
 const TOOL_LABEL: Record<string, ActivityLabel> = {
   list_dir: 'Searching',
@@ -27,6 +28,7 @@ const TOOL_LABEL: Record<string, ActivityLabel> = {
   bash: 'Running',
   bash_output: 'Checking',
   bash_kill: 'Running',
+  todo_write: 'Planning',
 }
 
 /** Label untuk tool; tool yang tidak dikenal dianggap mengubah sesuatu. */
