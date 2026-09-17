@@ -19,13 +19,15 @@ import {
   groupModels,
   NineRouterProvider,
   resolveInWorkspace,
+  type AgentOptions,
   type Message,
   type ModelFamily,
+  type RepairResult,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
 import { describeArgs, ToolCallProgress, toolActivity, turnActivity } from './activity.ts'
 import { commandBody, describeRequest, diffBody, renderPanel } from './approval.ts'
-import { MarkdownRenderer } from './markdown.ts'
+import { MarkdownRenderer, parseInline } from './markdown.ts'
 import { select } from './select.ts'
 import {
   listSessions,
@@ -35,9 +37,11 @@ import {
   SessionRecorder,
   shortId,
   type LoadedSession,
+  type SessionSummary,
 } from './sessions.ts'
 import { PhaseTally, phaseOf, StatusLine } from './status.ts'
 import { banner, theme } from './theme.ts'
+import { truncateText } from './text.ts'
 
 const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
 
@@ -108,6 +112,7 @@ Isi minimal:
 const HELP = `  /model          pilih model dengan tombol panah
   /model <id> [tingkat]
                   ganti langsung, misal /model cx/gpt-5.6-sol xhigh
+  /resume         pilih dan lanjutkan sesi lain di direktori ini
   /queue          lihat permintaan yang mengantre
   /queue hapus    kosongkan antrean
   /help           tampilkan bantuan ini
@@ -171,7 +176,7 @@ async function resolveResume(request: ResumeRequest, workspace: string): Promise
       if (request.mode === 'continue') {
         session = loadSession(summaries[0].id)
       } else {
-        const labels = summaries.map((item) => `${shortId(item.id)}  ${relativeTime(item.updatedAt).padEnd(14)}  ${item.title}`)
+        const labels = sessionLabels(summaries)
         // Pemilih butuh readline; yang ini sementara dan ditutup sebelum sesi dimulai,
         // karena readline utama harus dibuat dengan riwayat ketikan sesi terpilih.
         const temporary = createInterface({ input: stdin, output: stdout })
@@ -208,6 +213,29 @@ async function resolveResume(request: ResumeRequest, workspace: string): Promise
   return session
 }
 
+/** Baris pemilih sesi: id pendek, waktu, lalu pertanyaan pertama. */
+function sessionLabels(summaries: SessionSummary[]): string[] {
+  return summaries.map((item) => `${shortId(item.id)}  ${relativeTime(item.updatedAt).padEnd(14)}  ${item.title}`)
+}
+
+/** Riwayat panah atas dari sebuah sesi: pertanyaannya, terbaru lebih dulu. */
+function promptsOf(messages: Message[]): string[] {
+  return messages
+    .filter((message) => message.role === 'user' && message.content)
+    .map((message) => message.content as string)
+    .reverse()
+}
+
+/**
+ * Satu baris jawaban sebagai teks polos untuk ringkasan. Ringkasan dipotong di
+ * tengah blok, sehingga markdown mentah — `**tebal**`, judul, kutipan — akan tampil
+ * apa adanya bila tidak dibersihkan.
+ */
+function plainLine(line: string): string {
+  const withoutBlock = line.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/^\s{0,3}>\s?/, '')
+  return parseInline(withoutBlock).map((run) => run.text).join('')
+}
+
 /** Potongan beberapa tukar-jawab terakhir, supaya sesi yang dilanjutkan punya konteks. */
 function renderRecap(messages: Message[], exchanges = 3): string {
   const pairs: Array<{ question: string; answer: string }> = []
@@ -215,15 +243,19 @@ function renderRecap(messages: Message[], exchanges = 3): string {
     if (message.role === 'user' && message.content) pairs.push({ question: message.content, answer: '' })
     else if (message.role === 'assistant' && message.content && pairs.length) pairs[pairs.length - 1].answer = message.content
   }
-  const clip = (text: string, lines: number, width: number) => {
-    const all = text.trim().split('\n').filter((line) => line.trim())
-    const shown = all.slice(0, lines).map((line) => (line.length > width ? `${line.slice(0, width)}…` : line))
-    if (all.length > lines) shown[shown.length - 1] += ' …'
+  const width = Math.min((stdout.columns || 100) - 6, 100)
+  // Jawaban model dibersihkan dari markdown; pertanyaan ditampilkan persis seperti diketik.
+  const clip = (text: string, lines: number, clean: boolean) => {
+    const all = text.trim().split('\n').filter((line) => line.trim()).map((line) => clean ? plainLine(line) : line)
+    const shown = all.slice(0, lines).map((line) => truncateText(line, width))
+    // Baris yang sudah terpotong sudah berakhir elipsis; jangan ditambah lagi.
+    const last = shown.length - 1
+    if (all.length > lines && last >= 0 && !shown[last].endsWith('…')) shown[last] = `${shown[last]} …`
     return shown
   }
   return pairs.slice(-exchanges).map(({ question, answer }) => {
-    const asked = clip(question, 1, 90).map((line) => `  ${theme.accent('›')} ${line}`)
-    const replied = answer ? clip(answer, 2, 90).map((line) => `    ${theme.muted(line)}`) : []
+    const asked = clip(question, 1, false).map((line) => `  ${theme.accent('›')} ${line}`)
+    const replied = answer ? clip(answer, 2, true).map((line) => `    ${theme.muted(line)}`) : []
     return [...asked, ...replied].join('\n')
   }).join('\n')
 }
@@ -309,10 +341,7 @@ async function main() {
   })
 
   // Pertanyaan sesi sebelumnya dipulihkan ke riwayat panah atas, terbaru lebih dulu.
-  const previousPrompts = (resumed?.messages ?? [])
-    .filter((message) => message.role === 'user' && message.content)
-    .map((message) => message.content as string)
-    .reverse()
+  const previousPrompts = promptsOf(resumed?.messages ?? [])
   const readline = createInterface({ input: stdin, output: stdout, history: previousPrompts, historySize: 200 })
 
   /**
@@ -370,7 +399,8 @@ async function main() {
 
   const status = new StatusLine(emit)
 
-  const recorder = new SessionRecorder({ workspace, model, reasoningEffort, resumeId: resumed?.id })
+  // Dapat diganti oleh /resume; setiap penutup membaca nilai terkini lewat binding ini.
+  let recorder = new SessionRecorder({ workspace, model, reasoningEffort, resumeId: resumed?.id })
   // Bendera --model atau --effort saat melanjutkan mengganti model sesi itu.
   if (resumed && (model !== resumed.model || reasoningEffort !== resumed.reasoningEffort)) {
     recorder.recordModel(model, reasoningEffort)
@@ -535,12 +565,10 @@ async function main() {
     emit(`  ${allowed ? theme.accent('✓') : theme.danger('✗')} ${theme.muted(text)}\n`)
   }
 
-  const agent = new Agent({
+  const agentOptions: Omit<AgentOptions, 'history' | 'onMessage'> = {
     provider,
     registry: createDefaultRegistry(),
     workspace,
-    history: resumed?.messages,
-    onMessage: (message) => recorder.recordMessage(message),
     ...(config.BOO_MAX_CONTEXT_TOKENS
       ? { maxContextTokens: Number(config.BOO_MAX_CONTEXT_TOKENS) }
       : {}),
@@ -624,7 +652,13 @@ async function main() {
       recordDecision(false, `${summary} · ditolak`)
       return { allowed: false }
     },
-  })
+  }
+
+  /** Agent dibuat ulang saat berpindah sesi, dengan riwayat sesi yang dipilih. */
+  function createAgent(history: Message[] | undefined): Agent {
+    return new Agent({ ...agentOptions, history, onMessage: (message) => recorder.recordMessage(message) })
+  }
+  let agent = createAgent(resumed?.messages)
 
   /**
    * Memilih satu item dari daftar dan mengembalikan indeksnya, atau null bila
@@ -750,24 +784,88 @@ async function main() {
 
   console.log(`\n${banner()}\n`)
   console.log(`  ${theme.accent('Boo Code')} ${theme.muted(`· ${modelLabel(model, reasoningEffort)} · ${workspace}`)}`)
-  if (resumed) {
-    const count = resumed.messages.length
-    console.log(`  ${theme.muted(`melanjutkan sesi ${shortId(resumed.id)} · ${count} pesan · ${relativeTime(resumed.updatedAt)}`)}`)
-    const recap = renderRecap(resumed.messages)
+  /** Keterangan dan ringkasan sesi yang baru saja dilanjutkan. */
+  function showResumed(session: LoadedSession, restored: RepairResult | null): void {
+    console.log(`  ${theme.muted(`melanjutkan sesi ${shortId(session.id)} · ${session.messages.length} pesan · ${relativeTime(session.updatedAt)}`)}`)
+    const recap = renderRecap(session.messages)
     if (recap) console.log(`\n${recap}`)
 
     // Laporkan perbaikan riwayat agar jawaban pengganti tidak mengejutkan.
     const notes: string[] = []
-    if (resumed.skippedLines) notes.push(`${resumed.skippedLines} baris rusak dilewati`)
-    if (agent.restored?.filledToolResults) {
-      notes.push(`${agent.restored.filledToolResults} tool yang terputus ditandai tidak dijalankan`)
-    }
-    if (agent.restored?.filledReplies) {
-      notes.push(`${agent.restored.filledReplies} permintaan terputus ditandai belum dijawab`)
-    }
+    if (session.skippedLines) notes.push(`${session.skippedLines} baris rusak dilewati`)
+    if (restored?.filledToolResults) notes.push(`${restored.filledToolResults} tool yang terputus ditandai tidak dijalankan`)
+    if (restored?.filledReplies) notes.push(`${restored.filledReplies} permintaan terputus ditandai belum dijawab`)
     if (notes.length) console.log(`\n  ${theme.muted(`sesi sebelumnya berhenti mendadak: ${notes.join(', ')}`)}`)
     console.log()
   }
+
+  /**
+   * Berpindah ke sesi lain tanpa keluar dari boo. Sesi yang sedang berjalan sudah
+   * tersimpan pesan demi pesan, jadi tidak ada yang hilang saat ditinggalkan.
+   */
+  async function switchSession(): Promise<void> {
+    const summaries = listSessions(workspace)
+    if (!summaries.length) {
+      console.log(`  ${theme.muted('belum ada sesi tersimpan di direktori ini')}\n`)
+      return
+    }
+    const activeIndex = summaries.findIndex((summary) => summary.id === recorder.id)
+    const labels = sessionLabels(summaries)
+    const picked = await select(readline, {
+      title: 'Lanjutkan sesi',
+      items: labels,
+      activeIndex,
+      activeLabel: '(aktif)',
+      initialIndex: Math.max(0, activeIndex),
+      hint: 'panah atas/bawah memilih, enter melanjutkan, esc membatalkan',
+    })
+    if (picked === undefined) {
+      console.log(`\n  ${theme.bold('Sesi di direktori ini')}`)
+      labels.forEach((label) => console.log(`  ${label}`))
+      console.log(`  ${theme.muted('terminal ini tidak mendukung pemilih; jalankan boo --resume <id>')}\n`)
+      return
+    }
+    if (picked === null) {
+      console.log(`  ${theme.muted('dibatalkan')}\n`)
+      return
+    }
+    const target = summaries[picked]
+    if (target.id === recorder.id) {
+      console.log(`  ${theme.muted('sudah berada di sesi ini')}\n`)
+      return
+    }
+
+    let session: LoadedSession
+    try {
+      session = loadSession(target.id)
+    } catch (error) {
+      console.log(`  ${theme.danger('error')} ${error instanceof Error ? error.message : 'sesi gagal dimuat'}\n`)
+      return
+    }
+
+    const previous = recorder.started ? shortId(recorder.id) : null
+    recorder = new SessionRecorder({
+      workspace,
+      model: session.model ?? provider.model,
+      reasoningEffort: session.reasoningEffort,
+      resumeId: session.id,
+    })
+    agent = createAgent(session.messages)
+    if (session.model) {
+      provider.model = session.model
+      provider.reasoningEffort = validEffort(session.model, session.reasoningEffort)
+    }
+    // Izin "untuk sisa sesi" diberikan dalam konteks percakapan sebelumnya.
+    sessionApprovals.clear()
+    // readline tidak mengetikkan riwayatnya, tetapi menyimpannya di properti ini.
+    const typedHistory = (readline as unknown as { history?: string[] }).history
+    if (typedHistory) typedHistory.splice(0, typedHistory.length, ...promptsOf(session.messages))
+
+    if (previous) console.log(`  ${theme.muted(`sesi ${previous} tersimpan`)}`)
+    showResumed(session, agent.restored)
+  }
+
+  if (resumed) showResumed(resumed, agent.restored)
   console.log(`  ${theme.muted('ketik perintah, /help untuk daftar perintah')}\n`)
 
   for (;;) {
@@ -805,6 +903,10 @@ async function main() {
     }
     if (isQueueCommand(input)) {
       queueCommand(input.slice('/queue'.length).trim())
+      continue
+    }
+    if (input === '/resume') {
+      await switchSession()
       continue
     }
 

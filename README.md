@@ -100,6 +100,7 @@ ke bawah.
 |---|---|
 | `/model` | pilih model dengan tombol panah |
 | `/model <id> [tingkat]` | ganti langsung, misal `/model cx/gpt-5.6-sol xhigh` |
+| `/resume` | pilih dan lanjutkan sesi lain di direktori ini |
 | `/queue` | lihat permintaan yang mengantre |
 | `/queue hapus` | kosongkan antrean |
 | `/help` | daftar perintah |
@@ -235,10 +236,18 @@ seperti `claude --resume`. Saat keluar, perintahnya ditampilkan:
 | `boo --resume 5bd73640` | lanjutkan sesi tertentu; id lengkap atau awalannya |
 | `boo --resume` | pilih dari daftar sesi di direktori ini, terbaru lebih dulu |
 | `boo --continue` | langsung lanjutkan sesi yang terakhir diperbarui |
+| `/resume` | di dalam sesi: pindah ke sesi lain tanpa keluar dari `boo` |
+
+`/resume` membuka pemilih yang sama dengan `boo --resume`, dengan sesi yang sedang
+berjalan ditandai *(aktif)*. Sesi yang ditinggalkan sudah tersimpan pesan demi pesan,
+jadi tidak ada yang hilang. Riwayat percakapan, model dan tingkat penalaran, serta
+riwayat panah atas ikut berpindah; izin *untuk sisa sesi* dikosongkan karena diberikan
+dalam konteks percakapan sebelumnya.
 
 Sesi yang dilanjutkan memulihkan riwayat percakapan, model dan tingkat penalaran
 terakhirnya, serta riwayat ketikan untuk panah atas. Beberapa tukar-jawab terakhir
-ditampilkan di bawah banner sebagai pengingat. Bendera `--model` dan `--effort`
+ditampilkan sebagai pengingat: pertanyaan persis seperti diketik, jawaban sebagai
+teks polos tanpa markdown mentah. Bendera `--model` dan `--effort`
 tetap dapat dipakai untuk mengganti model sesi itu.
 
 ### Penyimpanan
@@ -272,6 +281,8 @@ riwayat diperbaiki lebih dulu:
 - Pertanyaan yang tak sempat dijawab diberi jawaban pengganti, di mana pun letaknya
   dalam riwayat — termasuk sesi yang pernah dilanjutkan lalu terputus lagi.
 - Hasil tool yatim dan baris berkas yang terpotong dibuang.
+- Berkas yang berakhir di tengah baris diberi baris baru sebelum rekaman berikutnya,
+  supaya pesan pertama setelah crash tidak tertempel pada baris rusak dan ikut hilang.
 
 Perbaikan dilaporkan saat sesi dibuka:
 

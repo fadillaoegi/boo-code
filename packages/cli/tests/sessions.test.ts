@@ -112,3 +112,18 @@ test('berkas sesi hanya dapat dibaca pemiliknya', () => {
   const mode = statSync(join(SESSIONS_DIR, `${session.id}.jsonl`)).mode & 0o777
   assert.equal(mode, 0o600)
 })
+
+test('melanjutkan sesi yang terpotong tidak merusak rekaman pertama sesudahnya', () => {
+  const session = recorder()
+  session.recordMessage({ role: 'user', content: 'sebelum crash' })
+  // Proses mati di tengah menulis: baris terakhir tanpa baris baru.
+  appendFileSync(join(SESSIONS_DIR, `${session.id}.jsonl`), '{"type":"message","message":{"role":"us')
+
+  const resumed = recorder({ resumeId: session.id })
+  resumed.recordMessage({ role: 'user', content: 'pertanyaan pertama setelah crash' })
+  resumed.recordMessage({ role: 'assistant', content: 'jawabannya' })
+
+  const loaded = loadSession(session.id)
+  assert.equal(loaded.skippedLines, 1, 'hanya baris yang terpotong yang dilewati')
+  assert.deepEqual(loaded.messages.map((m) => m.content), ['sebelum crash', 'pertanyaan pertama setelah crash', 'jawabannya'])
+})

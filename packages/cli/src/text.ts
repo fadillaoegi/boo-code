@@ -97,3 +97,18 @@ export function visibleWidth(text: string): number {
   for (const character of stripAnsi(text)) width += codePointWidth(character.codePointAt(0) ?? 0)
   return width
 }
+
+/** Memotong teks biasa agar muat dalam lebar kolom, dengan elipsis bila terpotong. */
+export function truncateText(text: string, width: number): string {
+  if (width <= 0) return ''
+  if (visibleWidth(text) <= width) return text
+  let used = 0
+  let output = ''
+  for (const character of text) {
+    const size = codePointWidth(character.codePointAt(0) ?? 0)
+    if (used + size > width - 1) break
+    used += size
+    output += character
+  }
+  return `${output}…`
+}

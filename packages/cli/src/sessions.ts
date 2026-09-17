@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Message } from '@boo/core'
@@ -87,6 +87,8 @@ export class SessionRecorder {
   private model: string
   private reasoningEffort: string | undefined
   private created: boolean
+  /** Sesi yang dilanjutkan diperiksa ekornya sekali, sebelum rekaman pertama. */
+  private tailChecked: boolean
 
   constructor(options: {
     workspace: string
@@ -100,6 +102,7 @@ export class SessionRecorder {
     this.model = options.model
     this.reasoningEffort = options.reasoningEffort
     this.created = Boolean(options.resumeId)
+    this.tailChecked = !options.resumeId
   }
 
   /** Sesi sudah punya berkas dan karenanya dapat dilanjutkan. */
@@ -143,7 +146,34 @@ export class SessionRecorder {
 
   /** Sinkron, agar urutan terjaga dan rekaman sudah di disk sebelum langkah berikutnya. */
   private write(record: SessionRecord): void {
+    if (!this.tailChecked) {
+      this.tailChecked = true
+      if (!endsWithNewline(sessionPath(this.id))) appendFileSync(sessionPath(this.id), '\n')
+    }
     appendFileSync(sessionPath(this.id), `${JSON.stringify(record)}\n`, { mode: 0o600 })
+  }
+}
+
+/**
+ * Proses yang mati di tengah menulis meninggalkan baris terakhir tanpa baris baru.
+ * Tanpa pemeriksaan ini, rekaman pertama sesi yang dilanjutkan tertempel pada baris
+ * rusak itu dan ikut hilang saat dimuat — pertanyaan pertama setelah crash lenyap.
+ */
+function endsWithNewline(path: string): boolean {
+  let descriptor: number
+  try {
+    descriptor = openSync(path, 'r')
+  } catch {
+    return true
+  }
+  try {
+    const { size } = fstatSync(descriptor)
+    if (size === 0) return true
+    const last = Buffer.alloc(1)
+    readSync(descriptor, last, 0, 1, size - 1)
+    return last[0] === 0x0a
+  } finally {
+    closeSync(descriptor)
   }
 }
 
