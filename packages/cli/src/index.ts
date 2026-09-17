@@ -32,6 +32,7 @@ import { describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActiv
 import { commandBody, describeRequest, diffBody, renderPanel } from './approval.ts'
 import { MarkdownRenderer } from './markdown.ts'
 import { select } from './select.ts'
+import { DISABLE_BRACKETED_PASTE, ENABLE_BRACKETED_PASTE, interceptPaste, PasteStore } from './paste.ts'
 import { renderTranscript } from './transcript.ts'
 import {
   listSessions,
@@ -535,7 +536,10 @@ async function main() {
     return text === '/queue' || text.startsWith('/queue ')
   }
 
-  readline.on('line', (line) => {
+  const pastes = new PasteStore()
+  readline.on('line', (typed) => {
+    // Penanda tempelan banyak baris dikembalikan menjadi isi aslinya.
+    const line = pastes.expand(typed)
     const waiter = waiting.shift()
     if (waiter) {
       // Terminal interaktif sudah menggemakan ketikan; stdin yang dipipe tidak,
@@ -556,7 +560,7 @@ async function main() {
         return
       }
       pending.push(text)
-      status.note(`  ${theme.muted(`antre #${pending.length}  ${text}`)}`)
+      status.note(`  ${theme.muted(`antre #${pending.length}  ${typed.trim()}`)}`)
       return
     }
     buffered.push(line)
@@ -569,6 +573,10 @@ async function main() {
   // Spinner dan ketikan berbagi satu baris. Begitu pengguna menekan tombol saat
   // Boo bekerja, animasi dihentikan agar readline memiliki barisnya sendiri.
   if (stdin.isTTY) {
+    // Harus dipasang sebelum pendengar lain: hanya pendengar readline yang dibungkus.
+    interceptPaste(stdin, (text) => readline.write(pastes.insert(text)))
+    stdout.write(ENABLE_BRACKETED_PASTE)
+    process.on('exit', () => stdout.write(DISABLE_BRACKETED_PASTE))
     // Dipasang di depan pendengar readline, sehingga baris ketik sudah punya
     // tempat sendiri sebelum readline menggemakan huruf pertama.
     stdin.prependListener('keypress', (_: string, key: { name?: string; ctrl?: boolean } = {}) => {

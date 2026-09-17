@@ -140,6 +140,11 @@ export function describeArgs(tool: string, args: Record<string, unknown>): strin
     return tool === 'grep' ? `"${args.pattern}"${where}` : `${args.pattern}${where}`
   }
   const path = typeof args.path === 'string' ? args.path : tool === 'list_dir' ? '.' : ''
+  if (tool === 'read_file' && path && typeof args.offset === 'number') {
+    return typeof args.limit === 'number'
+      ? `${path} · lines ${args.offset}–${args.offset + args.limit - 1}`
+      : `${path} · from line ${args.offset}`
+  }
   if (tool === 'write_file' && path && typeof args.content === 'string') {
     return `${path} · ${pluralLines(countLines(args.content))}`
   }

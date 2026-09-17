@@ -94,6 +94,20 @@ dipanggil dengan panah atas, atau ketika ketikan dipulihkan setelah spinner
 berhenti — karena readline hanya kembali ke awal baris ketik lalu membersihkan
 ke bawah.
 
+### Menempel teks banyak baris
+
+Log error atau potongan kode yang ditempel tidak lagi pecah menjadi banyak
+permintaan. Tempelan banyak baris diwakili satu penanda di baris ketik, jadi kamu
+masih bisa menambahkan pertanyaan sebelum atau sesudahnya:
+
+```
+› kenapa error ini muncul? [Tempelan #1 · 24 baris]
+```
+
+Saat dikirim, penanda diganti dengan isi aslinya utuh. Ini memakai bracketed paste,
+yang didukung terminal modern (Terminal.app, iTerm2, Warp, VS Code, Windows
+Terminal). Tempelan satu baris langsung disisipkan apa adanya.
+
 ### Perintah di dalam sesi
 
 | Perintah | Fungsi |
@@ -557,6 +571,21 @@ Esc tetap bekerja selama menunggu jeda.
 Bila tetap gagal, error ditampilkan dan dicatat di riwayat sebagai jawaban yang
 gagal. Model tahu jawabannya tadi tidak sampai, dan pertanyaan berikutnya tidak
 ditolak.
+
+## Membaca berkas besar
+
+`read_file` membaca paling banyak 2.000 baris atau 60 ribu karakter sekaligus,
+lalu memberi tahu model bagian mana yang sudah dibaca:
+
+```
+[Baris 1–2000 dari 5000. Lanjutkan dengan offset 2001, atau cari bagian yang dibutuhkan dengan grep.]
+```
+
+Model dapat membaca bagian tertentu dengan `offset` dan `limit`; nomor barisnya
+tetap nomor asli di berkas, sehingga cocok untuk `edit_file`. Status menampilkan
+rentangnya (`Reading  src/app.ts · lines 2001–2400`). Baris hasil minify yang
+sangat panjang dipotong per baris, dan berkas biner ditolak alih-alih dibaca
+sebagai teks rusak.
 
 ## Batas langkah
 
