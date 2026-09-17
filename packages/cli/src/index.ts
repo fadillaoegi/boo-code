@@ -27,8 +27,9 @@ import {
 import { GLOBAL_CONFIG_PATH, loadConfig } from './config.ts'
 import { describeArgs, ToolCallProgress, toolActivity, turnActivity } from './activity.ts'
 import { commandBody, describeRequest, diffBody, renderPanel } from './approval.ts'
-import { MarkdownRenderer, parseInline } from './markdown.ts'
+import { MarkdownRenderer } from './markdown.ts'
 import { select } from './select.ts'
+import { renderTranscript } from './transcript.ts'
 import {
   listSessions,
   loadSession,
@@ -41,7 +42,6 @@ import {
 } from './sessions.ts'
 import { PhaseTally, phaseOf, StatusLine } from './status.ts'
 import { banner, theme } from './theme.ts'
-import { truncateText } from './text.ts'
 
 const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
 
@@ -87,7 +87,9 @@ function version(): string {
 const USAGE = `boo — coding agent oleh FLdev
 
   boo                      mulai sesi di direktori saat ini
-  boo --resume [id]        lanjutkan sesi; tanpa id, pilih dari daftar
+  boo <id>                 langsung buka sesi tertentu, misal: boo 5bd73640
+  boo --resume             pilih sesi dari daftar
+  boo --resume <id>        langsung buka sesi tertentu
   boo --continue           lanjutkan sesi terakhir di direktori ini
   boo --model <id>         pilih model untuk sesi ini
   boo --effort <tingkat>   low, medium, high, atau xhigh (model Codex)
@@ -137,15 +139,50 @@ type ResumeRequest =
   | { mode: 'id'; id: string }
 
 /** Membaca --resume [id] dan --continue. Nilai yang diawali "-" adalah bendera lain. */
+/** Bendera yang selalu diikuti nilai; nilainya bukan argumen posisi. */
+const VALUE_FLAGS = new Set(['--model', '-m', '--effort'])
+
+/**
+ * Argumen tanpa bendera. Nilai milik bendera lain dilewati, sehingga
+ * `boo --model cx/gpt-5.5` tidak menganggap `cx/gpt-5.5` sebagai id sesi.
+ */
+function positionalArgs(): string[] {
+  const args = process.argv.slice(2)
+  const positional: string[] = []
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]
+    if (VALUE_FLAGS.has(arg)) {
+      index += 1
+      continue
+    }
+    if (arg === '--resume' || arg === '-r') {
+      if (args[index + 1] && !args[index + 1].startsWith('-')) index += 1
+      continue
+    }
+    if (!arg.startsWith('-')) positional.push(arg)
+  }
+  return positional
+}
+
+/**
+ * `boo --resume` menampilkan daftar untuk dipilih; `boo --resume <id>` dan
+ * `boo <id>` langsung membuka sesi itu tanpa memilih.
+ */
 function resumeRequest(): ResumeRequest {
   const args = process.argv.slice(2)
   if (args.includes('--continue') || args.includes('-c')) return { mode: 'continue' }
   const inline = args.find((arg) => arg.startsWith('--resume='))
   if (inline) return { mode: 'id', id: inline.slice('--resume='.length) }
   const index = args.findIndex((arg) => arg === '--resume' || arg === '-r')
-  if (index === -1) return { mode: 'new' }
-  const next = args[index + 1]
-  return next && !next.startsWith('-') ? { mode: 'id', id: next } : { mode: 'pick' }
+  if (index !== -1) {
+    const next = args[index + 1]
+    return next && !next.startsWith('-') ? { mode: 'id', id: next } : { mode: 'pick' }
+  }
+  const positional = positionalArgs()
+  if (positional.length > 1) {
+    fail(`Argumen tidak dikenal: ${positional.slice(1).join(' ')}`, 'Pakai `boo <id>` untuk membuka satu sesi, atau `boo --help`.')
+  }
+  return positional.length ? { mode: 'id', id: positional[0] } : { mode: 'new' }
 }
 
 function fail(message: string, hint?: string): never {
@@ -224,40 +261,6 @@ function promptsOf(messages: Message[]): string[] {
     .filter((message) => message.role === 'user' && message.content)
     .map((message) => message.content as string)
     .reverse()
-}
-
-/**
- * Satu baris jawaban sebagai teks polos untuk ringkasan. Ringkasan dipotong di
- * tengah blok, sehingga markdown mentah — `**tebal**`, judul, kutipan — akan tampil
- * apa adanya bila tidak dibersihkan.
- */
-function plainLine(line: string): string {
-  const withoutBlock = line.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/^\s{0,3}>\s?/, '')
-  return parseInline(withoutBlock).map((run) => run.text).join('')
-}
-
-/** Potongan beberapa tukar-jawab terakhir, supaya sesi yang dilanjutkan punya konteks. */
-function renderRecap(messages: Message[], exchanges = 3): string {
-  const pairs: Array<{ question: string; answer: string }> = []
-  for (const message of messages) {
-    if (message.role === 'user' && message.content) pairs.push({ question: message.content, answer: '' })
-    else if (message.role === 'assistant' && message.content && pairs.length) pairs[pairs.length - 1].answer = message.content
-  }
-  const width = Math.min((stdout.columns || 100) - 6, 100)
-  // Jawaban model dibersihkan dari markdown; pertanyaan ditampilkan persis seperti diketik.
-  const clip = (text: string, lines: number, clean: boolean) => {
-    const all = text.trim().split('\n').filter((line) => line.trim()).map((line) => clean ? plainLine(line) : line)
-    const shown = all.slice(0, lines).map((line) => truncateText(line, width))
-    // Baris yang sudah terpotong sudah berakhir elipsis; jangan ditambah lagi.
-    const last = shown.length - 1
-    if (all.length > lines && last >= 0 && !shown[last].endsWith('…')) shown[last] = `${shown[last]} …`
-    return shown
-  }
-  return pairs.slice(-exchanges).map(({ question, answer }) => {
-    const asked = clip(question, 1, false).map((line) => `  ${theme.accent('›')} ${line}`)
-    const replied = answer ? clip(answer, 2, true).map((line) => `    ${theme.muted(line)}`) : []
-    return [...asked, ...replied].join('\n')
-  }).join('\n')
 }
 
 /** Membaca nilai bendera seperti --model atau --effort dari argumen baris perintah. */
@@ -787,8 +790,9 @@ async function main() {
   /** Keterangan dan ringkasan sesi yang baru saja dilanjutkan. */
   function showResumed(session: LoadedSession, restored: RepairResult | null): void {
     console.log(`  ${theme.muted(`melanjutkan sesi ${shortId(session.id)} · ${session.messages.length} pesan · ${relativeTime(session.updatedAt)}`)}`)
-    const recap = renderRecap(session.messages)
-    if (recap) console.log(`\n${recap}`)
+    // Percakapan ditampilkan ulang seperti saat berlangsung, bukan diringkas.
+    const transcript = renderTranscript(session.messages, Math.min(stdout.columns || 100, MAX_ANSWER_WIDTH))
+    if (transcript) process.stdout.write(`\n${transcript}`)
 
     // Laporkan perbaikan riwayat agar jawaban pengganti tidak mengejutkan.
     const notes: string[] = []

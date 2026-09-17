@@ -38,6 +38,15 @@ function formatDuration(ms: number): string {
   return ms < 1_000 ? `${ms}ms` : `${(ms / 1_000).toFixed(1)}s`
 }
 
+/**
+ * Baris ringkasan fase yang membeku, misalnya "● Exploring  3 files  4.1s".
+ * Dipakai juga saat menampilkan ulang sesi, agar keduanya tidak pernah berbeda.
+ */
+export function phaseLine(phase: Phase, summary: string, duration?: string): string {
+  const label = PHASE_LABEL[phase].padEnd(LABEL_WIDTH)
+  return `  ${theme.accent('●')} ${theme.bold(label)}${summary}${duration ? `  ${theme.muted(duration)}` : ''}\n`
+}
+
 /** Memotong teks biasa agar muat dalam lebar kolom, dengan elipsis bila terpotong. */
 function truncate(text: string, width: number): string {
   if (width <= 0) return ''
@@ -140,14 +149,14 @@ export class StatusLine {
       return
     }
     const duration = formatDuration(Date.now() - this.phaseStartedAt)
-    const label = PHASE_LABEL[this.phase].padEnd(LABEL_WIDTH)
+    const phase = this.phase
     const summary = this.summary
     this.stop()
     this.phase = null
     this.summary = ''
     this.label = null
     this.detail = ''
-    this.write(`  ${theme.accent('●')} ${theme.bold(label)}${summary}  ${theme.muted(duration)}\n`)
+    this.write(phaseLine(phase, summary, duration))
   }
 
   /**

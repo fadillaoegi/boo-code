@@ -233,7 +233,8 @@ seperti `claude --resume`. Saat keluar, perintahnya ditampilkan:
 
 | Perintah | Fungsi |
 |---|---|
-| `boo --resume 5bd73640` | lanjutkan sesi tertentu; id lengkap atau awalannya |
+| `boo 5bd73640` | langsung buka sesi tertentu, tanpa memilih; id lengkap atau awalannya |
+| `boo --resume 5bd73640` | sama dengan di atas |
 | `boo --resume` | pilih dari daftar sesi di direktori ini, terbaru lebih dulu |
 | `boo --continue` | langsung lanjutkan sesi yang terakhir diperbarui |
 | `/resume` | di dalam sesi: pindah ke sesi lain tanpa keluar dari `boo` |
@@ -245,9 +246,27 @@ riwayat panah atas ikut berpindah; izin *untuk sisa sesi* dikosongkan karena dib
 dalam konteks percakapan sebelumnya.
 
 Sesi yang dilanjutkan memulihkan riwayat percakapan, model dan tingkat penalaran
-terakhirnya, serta riwayat ketikan untuk panah atas. Beberapa tukar-jawab terakhir
-ditampilkan sebagai pengingat: pertanyaan persis seperti diketik, jawaban sebagai
-teks polos tanpa markdown mentah. Bendera `--model` dan `--effort`
+terakhirnya, serta riwayat ketikan untuk panah atas.
+
+Percakapannya **ditampilkan ulang seperti saat berlangsung**, sehingga membuka sesi
+terasa kembali ke halaman chat-nya: pertanyaan persis seperti diketik, jawaban
+dirender sebagai markdown, pekerjaan tool diringkas dengan baris fase yang sama
+dengan tampilan langsung, dan penolakan tampil beserta arahannya. Isi hasil tool —
+isi berkas dan keluaran perintah — tidak ditampilkan, sama seperti saat sesi
+berjalan. Sesi panjang dibatasi pada 20 tukar-jawab terakhir.
+
+```
+  melanjutkan sesi 51d91869 · 10 pesan · 36 menit lalu
+
+> Ubah baris kedua catatan.md dengan edit_file ...
+  x Ubah berkas catatan.md · ditolak: tulis dengan huruf kapital semua
+  * Applying      catatan.md
+
+  Baris kedua catatan.md telah diubah menjadi huruf kapital semua.
+```
+
+Argumen tanpa bendera dianggap id sesi, tetapi nilai milik bendera lain tidak:
+`boo --model cx/gpt-5.5` membuka sesi baru, bukan mencari sesi bernama `cx/gpt-5.5`. Bendera `--model` dan `--effort`
 tetap dapat dipakai untuk mengganti model sesi itu.
 
 ### Penyimpanan
