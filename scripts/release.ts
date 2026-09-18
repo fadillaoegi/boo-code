@@ -16,6 +16,7 @@ import { build } from 'esbuild'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { buildAssets } from '../packages/web/src/server/assets.ts'
 
 const root = join(import.meta.dirname, '..')
 const cliDirectory = join(root, 'packages', 'cli')
@@ -34,6 +35,7 @@ rmSync(releaseDirectory, { recursive: true, force: true })
 mkdirSync(join(packageDirectory, 'dist'), { recursive: true })
 
 const outfile = join(packageDirectory, 'dist', 'boo-code.js')
+const webAssets = await buildAssets()
 await build({
   entryPoints: [join(cliDirectory, 'src', 'index.ts')],
   bundle: true,
@@ -43,6 +45,9 @@ await build({
   outfile,
   legalComments: 'none',
   logLevel: 'warning',
+  define: {
+    __BOO_WEB_ASSETS__: JSON.stringify(webAssets),
+  },
 })
 chmodSync(outfile, 0o755)
 

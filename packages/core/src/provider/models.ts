@@ -170,3 +170,23 @@ export function describeSelection(families: ModelFamily[], modelId: string, reas
   const { family, option } = found
   return option.label ? `${family.label} · ${option.label}` : family.label
 }
+
+/** Keluarga model yang ditampilkan lebih dulu di pemilih model CLI dan web. */
+export const FEATURED_FAMILIES = [
+  'ag/gemini-3.5-flash',
+  'ag/gemini-3.7-flash',
+  'ag/gemini-3.1-pro',
+  'ag/claude-sonnet-4-6',
+  'ag/claude-opus-4-6-thinking',
+  'cx/gpt-5.6-luna',
+  'cx/gpt-5.6-terra',
+  'cx/gpt-5.6-sol',
+]
+
+/** Tingkat penalaran yang benar-benar diterima model ini, atau undefined. */
+export function acceptedEffort(model: string, effort: string | undefined): string | undefined {
+  if (!effort) return undefined
+  const [family] = groupModels([model])
+  if (family?.source !== 'parameter') return undefined
+  return family.options.some((option) => option.reasoningEffort === effort) ? effort : undefined
+}

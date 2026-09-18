@@ -35,8 +35,17 @@ importers:
       '@boo/core':
         specifier: workspace:*
         version: link:../core
+      '@boo/web':
+        specifier: workspace:*
+        version: link:../web
 
   packages/core: {}
+
+  packages/web:
+    dependencies:
+      '@boo/core':
+        specifier: workspace:*
+        version: link:../core
 
 packages:
 

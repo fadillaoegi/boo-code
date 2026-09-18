@@ -1,0 +1,13 @@
+{
+  "name": "@boo/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/server/index.ts",
+    "./protocol.ts": "./src/protocol.ts"
+  },
+  "dependencies": {
+    "@boo/core": "workspace:*"
+  }
+}

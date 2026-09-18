@@ -12,7 +12,10 @@ import { stdin, stdout } from 'node:process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import {
+  INIT_PROMPT,
+  acceptedEffort,
   Agent,
+  FEATURED_FAMILIES,
   createDefaultRegistry,
   describeSelection,
   diffStats,
@@ -46,6 +49,7 @@ import {
   type RepairResult,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from '@boo/core/config/config.ts'
+import { openBrowser, startWeb } from '@boo/web'
 import { runSetup } from './setup.ts'
 import { describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from '@boo/core/presentation/activity.ts'
 import { commandBody, describeRequest, diffBody, renderPanel, undoBody } from './approval.ts'
@@ -67,7 +71,7 @@ import { PhaseTally, phaseOf, StatusLine } from './status.ts'
 import { renderTodos } from './todos.ts'
 import { banner, theme } from './theme.ts'
 
-const DEFAULT_MODEL = 'ag/claude-sonnet-4-6'
+const DEFAULT_MODEL = 'ag/gemini-3.1-pro'
 
 /**
  * Jeda sebelum spinner muncul selagi baris jawaban belum lengkap. Tanpa jeda,
@@ -83,16 +87,6 @@ const MAX_ANSWER_WIDTH = 120
  * dapat dijangkau lewat "Model lain…" supaya tidak ada model yang hilang —
  * termasuk model bawaan.
  */
-const FEATURED_FAMILIES = [
-  'ag/gemini-3.5-flash',
-  'ag/gemini-3.7-flash',
-  'ag/gemini-3.1-pro',
-  'ag/claude-sonnet-4-6',
-  'ag/claude-opus-4-6-thinking',
-  'cx/gpt-5.6-luna',
-  'cx/gpt-5.6-terra',
-  'cx/gpt-5.6-sol',
-]
 
 const OTHER_MODELS_LABEL = 'Model lain…'
 const DEFAULT_BASE_URL = 'http://localhost:20128'
@@ -121,6 +115,7 @@ const USAGE = `${COMMAND} — coding agent oleh FLdev
   ${COMMAND} --resume             pilih sesi dari daftar
   ${COMMAND} --resume <id>        langsung buka sesi tertentu
   ${COMMAND} --continue           lanjutkan sesi terakhir di direktori ini
+  ${COMMAND} web [--port <nomor>] buka antarmuka web lokal
   ${COMMAND} --model <id>         pilih model untuk sesi ini
   ${COMMAND} --effort <tingkat>   low, medium, high, atau xhigh (model Codex)
   ${COMMAND} --verbose            tampilkan keluaran tool selengkapnya
@@ -139,7 +134,7 @@ Isi minimal:
 
   NINEROUTER_URL=http://localhost:20128
   NINEROUTER_KEY=sk-...
-  BOO_MODEL=ag/claude-sonnet-4-6
+  BOO_MODEL=ag/gemini-3.1-pro
   BOO_EFFORT=medium`
 
 const HELP = `  /model          pilih model dengan tombol panah
@@ -163,22 +158,6 @@ Esc atau Ctrl-C menghentikan pekerjaan yang sedang berjalan.
 Aturan proyek dibaca dari BOO.md (atau AGENTS.md, CLAUDE.md) di workspace
 dan induknya sampai akar repo, serta ~/.boo/BOO.md untuk semua proyek.`
 
-/**
- * Permintaan di balik /init. Aturan yang baik berisi hal yang tidak bisa ditebak
- * dari membaca beberapa berkas, bukan ringkasan struktur yang sudah terlihat.
- */
-const INIT_PROMPT = `Tulis berkas BOO.md di akar workspace berisi aturan proyek untuk agent coding yang bekerja di repo ini.
-
-Selidiki proyeknya lebih dulu: berkas manifest (package.json, pyproject.toml, go.mod, Cargo.toml, dan sejenisnya), konfigurasi lint/format/test, README, dan beberapa berkas kode yang mewakili. Bila sudah ada AGENTS.md, CLAUDE.md, .cursorrules, atau .github/copilot-instructions.md, jadikan bahan dan jangan kehilangan isinya. Bila BOO.md sudah ada, perbaiki berkas itu alih-alih menulis ulang dari nol.
-
-Isi yang dibutuhkan, singkat dan konkret:
-- perintah untuk build, test (termasuk menjalankan satu test), lint, dan typecheck;
-- arsitektur tingkat tinggi yang baru terlihat setelah membaca banyak berkas;
-- konvensi yang berbeda dari kebiasaan umum: bahasa komentar, penamaan, pola error, gaya import;
-- hal yang tidak boleh dilakukan atau disentuh.
-
-Jangan tulis hal yang jelas dari struktur folder, saran umum seperti "tulis kode yang bersih", atau informasi yang tidak kamu temukan di repo. Usahakan di bawah 100 baris.`
-
 function describeInstructions(files: readonly InstructionFile[]): string {
   return files.map((file) => file.label + (file.truncated ? ' (dipotong)' : '')).join(', ')
 }
@@ -200,7 +179,7 @@ type ResumeRequest =
 
 /** Membaca --resume [id] dan --continue. Nilai yang diawali "-" adalah bendera lain. */
 /** Bendera yang selalu diikuti nilai; nilainya bukan argumen posisi. */
-const VALUE_FLAGS = new Set(['--model', '-m', '--effort'])
+const VALUE_FLAGS = new Set(['--model', '-m', '--effort', '--port', '-p'])
 
 /**
  * Argumen tanpa bendera. Nilai milik bendera lain dilewati, sehingga
@@ -332,6 +311,15 @@ function flagValue(name: string, short?: string): string | undefined {
   return args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 }
 
+function webPort(): number | undefined {
+  const value = flagValue('port', 'p')
+  if (value === undefined) return undefined
+  if (!/^\d+$/.test(value)) fail(`Port tidak sah: ${value}`, `Pakai nomor antara 0 dan 65535, misalnya \`${COMMAND} web --port 3000\`.`)
+  const port = Number(value)
+  if (port > 65_535) fail(`Port tidak sah: ${value}`, `Pakai nomor antara 0 dan 65535, misalnya \`${COMMAND} web --port 3000\`.`)
+  return port
+}
+
 /**
  * Memastikan tingkat penalaran berlaku untuk model tersebut.
  *
@@ -340,10 +328,7 @@ function flagValue(name: string, short?: string): string | undefined {
  * permintaan berikutnya. Karena itu tingkat yang tidak cocok dibuang di sini.
  */
 function validEffort(model: string, effort: string | undefined): string | undefined {
-  if (!effort) return undefined
-  const [family] = groupModels([model])
-  if (family?.source !== 'parameter') return undefined
-  return family.options.some((option) => option.reasoningEffort === effort) ? effort : undefined
+  return acceptedEffort(model, effort)
 }
 
 function requireKey(key: string | undefined): string {
@@ -393,6 +378,24 @@ async function main() {
     console.log(`\n  ${theme.muted('Boo Code belum dikonfigurasi di mesin ini.')}`)
     if (!await runSetup(setupDefaults())) process.exit(1)
     config = loadConfig(workspace)
+  }
+  if (process.argv[2] === 'web') {
+    requireKey(config.NINEROUTER_KEY)
+    const running = await startWeb({ workspace, config, version: version(), port: webPort() })
+    console.log(`\n  ${theme.accentBold('Boo Code web')} berjalan untuk ${workspace}`)
+    console.log(`  ${theme.muted('Buka di browser:')} ${running.server.openUrl}`)
+    console.log(`  ${theme.muted('Tekan Ctrl-C untuk menghentikan server.')}\n`)
+    openBrowser(running.server.openUrl)
+    let closing = false
+    const close = async () => {
+      if (closing) return
+      closing = true
+      await running.close()
+      process.exit(0)
+    }
+    process.once('SIGINT', () => { void close() })
+    process.once('SIGTERM', () => { void close() })
+    return
   }
   const resumed = await resolveResume(resumeRequest(), workspace)
 

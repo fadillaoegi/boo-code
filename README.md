@@ -1,7 +1,21 @@
 # Boo Code
 
-Coding agent buatan FLdev. Satu otak (`@boo/core`), dua antarmuka: CLI `boo` hari ini,
-web menyusul. Nama produknya Boo Code; CLI dan web hanyalah dua cara menjalankannya. Model diakses lewat [9Router](http://localhost:20128) sebagai satu pintu.
+Coding agent buatan FLdev. Satu otak (`@boo/core`), dua antarmuka: CLI `boo` dan web lokal.
+Nama produknya Boo Code; CLI dan web hanyalah dua cara menjalankannya. Model diakses lewat [9Router](http://localhost:20128) sebagai satu pintu.
+
+## Antarmuka web lokal
+
+Jalankan dari direktori proyek yang ingin dikerjakan:
+
+```bash
+boo-code web
+```
+
+Boo membuka browser ke server pada `127.0.0.1` dengan token acak per proses. Bila
+port tertentu diperlukan, gunakan `boo-code web --port 3000`. Halaman menyediakan
+sesi, model, spec, antrean, streaming jawaban, dan persetujuan perubahan/perintah;
+menutup tab tidak menghentikan pekerjaan. Tekan Ctrl-C di terminal untuk menutup
+server.
 
 ## Memasang di mesin lain
 
@@ -30,7 +44,7 @@ boo-code setup
   Alamat 9Router [http://localhost:20128]:
   Kunci API (dari Dashboard 9Router): ***********************************
   ✓ Terhubung ke 9Router · 23 model tersedia
-  Model bawaan [ag/claude-sonnet-4-6]:
+  Model bawaan [ag/gemini-3.1-pro]:
 
   ✓ Tersimpan. Model dan tingkat penalaran dapat diganti kapan saja dengan /model.
 ```
@@ -253,7 +267,7 @@ BOO_MODEL=ag/gemini-3-flash pnpm boo
 ```
 
 Urutan prioritas: flag `--model`, lalu `BOO_MODEL` di `.env.local`, lalu bawaan
-`ag/claude-sonnet-4-6`.
+`ag/gemini-3.1-pro`.
 
 ## Struktur
 
@@ -508,7 +522,7 @@ direktori kerja menang. Di luar repo git, hanya direktori kerja yang dibaca.
 Berkas yang dimuat tampil saat Boo dibuka:
 
 ```
-  Boo Code · Claude Sonnet 4.6 · ~/proyek/web
+  Boo Code · Gemini 3.1 Pro · ~/proyek/web
   aturan proyek: ~/.boo/BOO.md, ../../AGENTS.md, BOO.md
 ```
 
@@ -946,7 +960,7 @@ luar workspace. Itu satu-satunya penghalang antara agent dan sisa filesystem.
 
 ## Model
 
-Default `ag/claude-sonnet-4-6`, dapat diganti lewat `BOO_MODEL` di `.env.local`.
+Default `ag/gemini-3.1-pro`, dapat diganti lewat `BOO_MODEL` di `.env.local`.
 
 Model wajib mendukung function calling secara utuh. Verifikasi dengan
 `pnpm check:tools` di repo `boo-ai-chat-web` sebelum memakainya di sini —

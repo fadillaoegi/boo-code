@@ -14,7 +14,7 @@ import { theme } from './theme.ts'
 
 export const DEFAULT_BASE_URL = 'http://localhost:20128'
 /** Model bawaan yang dicoba lebih dulu bila tersedia di 9Router. */
-const PREFERRED_MODELS = ['ag/claude-sonnet-4-6', 'cx/gpt-5.6-terra', 'ag/gemini-3.7-flash-high']
+const PREFERRED_MODELS = ['ag/gemini-3.1-pro', 'ag/claude-sonnet-4-6', 'cx/gpt-5.6-terra', 'ag/gemini-3.7-flash-high']
 
 const CTRL_C = String.fromCharCode(3)
 const BACKSPACE = String.fromCharCode(127)
