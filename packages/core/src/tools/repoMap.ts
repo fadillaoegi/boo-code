@@ -1,6 +1,6 @@
+import type * as TS from 'typescript'
 import { readFile, stat } from 'node:fs/promises'
 import { extname, relative, sep } from 'node:path'
-import * as ts from 'typescript'
 import type { Tool } from '../domain/tool.ts'
 import { findFiles, type FoundFile } from './search.ts'
 import { isSensitivePath } from './secrets.ts'
@@ -39,116 +39,139 @@ export interface RepositoryAnalysis {
   inherits: string[]
   parser: 'typescript-ast' | 'fallback'
 }
+type TypeScriptApi = typeof TS
+
+/**
+ * Compiler TypeScript berukuran belasan megabyte dan hanya dibutuhkan untuk berkas
+ * JavaScript/TypeScript. Ia dimuat sekali saat pertama diperlukan; bila tidak
+ * terpasang, analisis jatuh ke pembacaan berbasis pola yang sudah ada.
+ */
+let compiler: TypeScriptApi | null | undefined
+
+export async function loadTypeScriptCompiler(): Promise<TypeScriptApi | null> {
+  if (compiler !== undefined) return compiler
+  try {
+    compiler = await import('typescript')
+  } catch {
+    compiler = null
+  }
+  return compiler
+}
+
 interface MapEntry { path: string; absolute: string; buffer: Buffer; symbols: RepositorySymbol[]; important: boolean; score: number }
 
-function scriptKind(extension: string): ts.ScriptKind {
-  if (extension === '.tsx') return ts.ScriptKind.TSX
-  if (extension === '.jsx') return ts.ScriptKind.JSX
-  if (['.js', '.mjs'].includes(extension)) return ts.ScriptKind.JS
-  return ts.ScriptKind.TS
-}
-
-function lineRange(source: ts.SourceFile, node: ts.Node): { line: number; endLine: number } {
-  return {
-    line: source.getLineAndCharacterOfPosition(node.getStart(source, false)).line + 1,
-    endLine: source.getLineAndCharacterOfPosition(node.getEnd()).line + 1,
-  }
-}
-
-function declarationName(name: ts.DeclarationName | ts.BindingName | undefined): string | null {
-  if (!name) return null
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text
-  return null
-}
-
-function exported(node: ts.Node): boolean {
-  const target = ts.isVariableDeclaration(node) && ts.isVariableStatement(node.parent.parent) ? node.parent.parent : node
-  return ts.canHaveModifiers(target) && Boolean(ts.getModifiers(target)?.some((modifier) =>
-    modifier.kind === ts.SyntaxKind.ExportKeyword || modifier.kind === ts.SyntaxKind.DefaultKeyword))
-}
-
-function callName(expression: ts.LeftHandSideExpression): string | null {
-  if (ts.isIdentifier(expression)) return expression.text
-  if (ts.isPropertyAccessExpression(expression)) return expression.name.text
-  if (ts.isElementAccessExpression(expression) && expression.argumentExpression && (ts.isStringLiteral(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression))) {
-    return expression.argumentExpression.text
-  }
-  return null
-}
-
-function analyzeTypeScript(content: string, extension: string): RepositoryAnalysis {
-  const source = ts.createSourceFile(`source${extension}`, content, ts.ScriptTarget.Latest, true, scriptKind(extension))
-  const symbols: RepositorySymbol[] = []
-  const calls: RepositoryCall[] = []
-  const imports = new Set<string>()
-  const inherits = new Set<string>()
-
-  const addSymbol = (node: ts.Node, kind: string, name: string | null, container?: string, heritage: string[] = []): string | undefined => {
-    if (!name || symbols.length >= MAX_SYMBOLS_PER_FILE) return container
-    const range = lineRange(source, node)
-    symbols.push({ ...range, kind, name, ...(container ? { container } : {}), ...(exported(node) ? { exported: true } : {}), ...(heritage.length ? { inherits: heritage } : {}) })
-    return container ? `${container}.${name}` : name
+/**
+ * Analisis AST. Compiler TypeScript diterima sebagai argumen, bukan diimpor di
+ * puncak berkas, supaya ia hanya dimuat ketika benar-benar dipakai.
+ */
+function analyzeWithCompiler(ts: TypeScriptApi, content: string, extension: string): RepositoryAnalysis {
+  function scriptKind(extension: string): TS.ScriptKind {
+    if (extension === '.tsx') return ts.ScriptKind.TSX
+    if (extension === '.jsx') return ts.ScriptKind.JSX
+    if (['.js', '.mjs'].includes(extension)) return ts.ScriptKind.JS
+    return ts.ScriptKind.TS
   }
 
-  const visit = (node: ts.Node, container?: string): void => {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      const specifier = node.moduleSpecifier
-      if (specifier && ts.isStringLiteral(specifier) && specifier.text.length <= 200) imports.add(specifier.text)
+  function lineRange(source: TS.SourceFile, node: TS.Node): { line: number; endLine: number } {
+    return {
+      line: source.getLineAndCharacterOfPosition(node.getStart(source, false)).line + 1,
+      endLine: source.getLineAndCharacterOfPosition(node.getEnd()).line + 1,
+    }
+  }
+
+  function declarationName(name: TS.DeclarationName | TS.BindingName | undefined): string | null {
+    if (!name) return null
+    if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text
+    return null
+  }
+
+  function exported(node: TS.Node): boolean {
+    const target = ts.isVariableDeclaration(node) && ts.isVariableStatement(node.parent.parent) ? node.parent.parent : node
+    return ts.canHaveModifiers(target) && Boolean(ts.getModifiers(target)?.some((modifier) =>
+      modifier.kind === ts.SyntaxKind.ExportKeyword || modifier.kind === ts.SyntaxKind.DefaultKeyword))
+  }
+
+  function callName(expression: TS.LeftHandSideExpression): string | null {
+    if (ts.isIdentifier(expression)) return expression.text
+    if (ts.isPropertyAccessExpression(expression)) return expression.name.text
+    if (ts.isElementAccessExpression(expression) && expression.argumentExpression && (ts.isStringLiteral(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression))) {
+      return expression.argumentExpression.text
+    }
+    return null
+  }
+
+    const source = ts.createSourceFile(`source${extension}`, content, ts.ScriptTarget.Latest, true, scriptKind(extension))
+    const symbols: RepositorySymbol[] = []
+    const calls: RepositoryCall[] = []
+    const imports = new Set<string>()
+    const inherits = new Set<string>()
+
+    const addSymbol = (node: TS.Node, kind: string, name: string | null, container?: string, heritage: string[] = []): string | undefined => {
+      if (!name || symbols.length >= MAX_SYMBOLS_PER_FILE) return container
+      const range = lineRange(source, node)
+      symbols.push({ ...range, kind, name, ...(container ? { container } : {}), ...(exported(node) ? { exported: true } : {}), ...(heritage.length ? { inherits: heritage } : {}) })
+      return container ? `${container}.${name}` : name
     }
 
-    let childContainer = container
-    if (ts.isClassDeclaration(node)) {
-      const heritage: string[] = []
-      for (const clause of node.heritageClauses ?? []) {
-        for (const type of clause.types) {
-          const name = type.expression.getText(source).slice(0, 128)
-          if (name) { inherits.add(name); heritage.push(name) }
+    const visit = (node: TS.Node, container?: string): void => {
+      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+        const specifier = node.moduleSpecifier
+        if (specifier && ts.isStringLiteral(specifier) && specifier.text.length <= 200) imports.add(specifier.text)
+      }
+
+      let childContainer = container
+      if (ts.isClassDeclaration(node)) {
+        const heritage: string[] = []
+        for (const clause of node.heritageClauses ?? []) {
+          for (const type of clause.types) {
+            const name = type.expression.getText(source).slice(0, 128)
+            if (name) { inherits.add(name); heritage.push(name) }
+          }
+        }
+        childContainer = addSymbol(node, 'class', declarationName(node.name), container, heritage)
+      } else if (ts.isInterfaceDeclaration(node)) {
+        const heritage: string[] = []
+        for (const clause of node.heritageClauses ?? []) {
+          for (const type of clause.types) {
+            const name = type.expression.getText(source).slice(0, 128)
+            if (name) { inherits.add(name); heritage.push(name) }
+          }
+        }
+        childContainer = addSymbol(node, 'interface', declarationName(node.name), container, heritage)
+      } else if (ts.isTypeAliasDeclaration(node)) {
+        addSymbol(node, 'type', declarationName(node.name), container)
+      } else if (ts.isEnumDeclaration(node)) {
+        childContainer = addSymbol(node, 'enum', declarationName(node.name), container)
+      } else if (ts.isFunctionDeclaration(node)) {
+        childContainer = addSymbol(node, 'function', declarationName(node.name), container)
+      } else if (ts.isMethodDeclaration(node) || ts.isMethodSignature(node)) {
+        childContainer = addSymbol(node, 'method', declarationName(node.name), container)
+      } else if (ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {
+        childContainer = addSymbol(node, ts.isGetAccessorDeclaration(node) ? 'getter' : 'setter', declarationName(node.name), container)
+      } else if (ts.isVariableDeclaration(node) && ts.isVariableStatement(node.parent.parent) && ts.isSourceFile(node.parent.parent.parent)) {
+        const flags = node.parent.flags
+        const kind = flags & ts.NodeFlags.Const ? 'const' : flags & ts.NodeFlags.Let ? 'let' : 'var'
+        const name = declarationName(node.name)
+        const scope = addSymbol(node, kind, name, container)
+        if (node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) childContainer = scope
+      }
+
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+        const name = callName(node.expression)
+        if (name && calls.length < MAX_CALLS_PER_FILE) calls.push({ line: lineRange(source, node).line, name, ...(container ? { container } : {}) })
+        if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          const argument = node.arguments[0]
+          if (argument && ts.isStringLiteral(argument) && argument.text.length <= 200) imports.add(argument.text)
+        } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+          const argument = node.arguments[0]
+          if (argument && ts.isStringLiteral(argument) && argument.text.length <= 200) imports.add(argument.text)
         }
       }
-      childContainer = addSymbol(node, 'class', declarationName(node.name), container, heritage)
-    } else if (ts.isInterfaceDeclaration(node)) {
-      const heritage: string[] = []
-      for (const clause of node.heritageClauses ?? []) {
-        for (const type of clause.types) {
-          const name = type.expression.getText(source).slice(0, 128)
-          if (name) { inherits.add(name); heritage.push(name) }
-        }
-      }
-      childContainer = addSymbol(node, 'interface', declarationName(node.name), container, heritage)
-    } else if (ts.isTypeAliasDeclaration(node)) {
-      addSymbol(node, 'type', declarationName(node.name), container)
-    } else if (ts.isEnumDeclaration(node)) {
-      childContainer = addSymbol(node, 'enum', declarationName(node.name), container)
-    } else if (ts.isFunctionDeclaration(node)) {
-      childContainer = addSymbol(node, 'function', declarationName(node.name), container)
-    } else if (ts.isMethodDeclaration(node) || ts.isMethodSignature(node)) {
-      childContainer = addSymbol(node, 'method', declarationName(node.name), container)
-    } else if (ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {
-      childContainer = addSymbol(node, ts.isGetAccessorDeclaration(node) ? 'getter' : 'setter', declarationName(node.name), container)
-    } else if (ts.isVariableDeclaration(node) && ts.isVariableStatement(node.parent.parent) && ts.isSourceFile(node.parent.parent.parent)) {
-      const flags = node.parent.flags
-      const kind = flags & ts.NodeFlags.Const ? 'const' : flags & ts.NodeFlags.Let ? 'let' : 'var'
-      const name = declarationName(node.name)
-      const scope = addSymbol(node, kind, name, container)
-      if (node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) childContainer = scope
-    }
 
-    if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
-      const name = callName(node.expression)
-      if (name && calls.length < MAX_CALLS_PER_FILE) calls.push({ line: lineRange(source, node).line, name, ...(container ? { container } : {}) })
-      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        const argument = node.arguments[0]
-        if (argument && ts.isStringLiteral(argument) && argument.text.length <= 200) imports.add(argument.text)
-      } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require') {
-        const argument = node.arguments[0]
-        if (argument && ts.isStringLiteral(argument) && argument.text.length <= 200) imports.add(argument.text)
-      }
+      ts.forEachChild(node, (child) => visit(child, childContainer))
     }
-
-    ts.forEachChild(node, (child) => visit(child, childContainer))
-  }
-  visit(source)
-  return { symbols, calls, imports: [...imports].slice(0, 80), inherits: [...inherits].slice(0, 80), parser: 'typescript-ast' }
+    visit(source)
+    return { symbols, calls, imports: [...imports].slice(0, 80), inherits: [...inherits].slice(0, 80), parser: 'typescript-ast' }
 }
 
 function languagePattern(extension: string): RegExp[] {
@@ -195,14 +218,17 @@ function extractFallbackSymbols(content: string, extension: string): RepositoryS
 }
 
 /** Analisis AST untuk JS/TS; bahasa lain tetap memakai extractor deklarasi konservatif. */
-export function analyzeRepositorySource(content: string, extension: string): RepositoryAnalysis {
+export async function analyzeRepositorySource(content: string, extension: string): Promise<RepositoryAnalysis> {
   const normalized = extension.toLowerCase()
-  if (TYPESCRIPT_EXTENSIONS.has(normalized)) return analyzeTypeScript(content, normalized)
+  if (TYPESCRIPT_EXTENSIONS.has(normalized)) {
+    const ts = await loadTypeScriptCompiler()
+    if (ts) return analyzeWithCompiler(ts, content, normalized)
+  }
   return { symbols: extractFallbackSymbols(content, normalized), calls: [], imports: [], inherits: [], parser: 'fallback' }
 }
 
-export function extractRepositorySymbols(content: string, extension: string): RepositorySymbol[] {
-  return analyzeRepositorySource(content, extension).symbols
+export async function extractRepositorySymbols(content: string, extension: string): Promise<RepositorySymbol[]> {
+  return (await analyzeRepositorySource(content, extension)).symbols
 }
 
 function words(value: string): string[] {
@@ -288,7 +314,7 @@ export const repoMapTool: Tool<RepoMapArgs> = {
         if (buffer.subarray(0, 8_000).includes(0)) continue
         bytes += buffer.length
         scanned += 1
-        const symbols = important ? [] : extractRepositorySymbols(buffer.toString('utf8'), extension)
+        const symbols = important ? [] : await extractRepositorySymbols(buffer.toString('utf8'), extension)
         const score = relevance(file.path, symbols, args.query ?? '')
         if (score > 0 && (important || symbols.length || args.query)) entries.push({ path: file.path, absolute: file.absolute, buffer, symbols, important, score })
       } catch {

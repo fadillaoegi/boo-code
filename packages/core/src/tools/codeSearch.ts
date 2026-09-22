@@ -242,7 +242,7 @@ export async function updateRepositoryIndex(workspace: string, home?: string, si
       const content = buffer.toString('utf8')
       const extension = extname(file.path).toLowerCase()
       const analysis = SOURCE_EXTENSIONS.has(extension)
-        ? analyzeRepositorySource(content, extension)
+        ? await analyzeRepositorySource(content, extension)
         : { symbols: [], calls: [], imports: [], inherits: [], parser: 'fallback' as const }
       files.push({
         path: file.path,

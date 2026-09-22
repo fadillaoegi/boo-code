@@ -365,7 +365,8 @@ Tool `code_search` menangani pencarian konseptual seperti "alur autentikasi" ata
 "cache pengguna". Ia meranking path, simbol, identifier, import, dan hubungan
 dependency satu tingkat; hasilnya menyertakan baris source terbaru sebagai bukti.
 Gunakan `grep` untuk teks atau regex yang persis, `repo_map` untuk melihat struktur,
-dan `code_search` untuk menemukan implementasi ketika nama simbol belum diketahui.
+`code_search` untuk menemukan implementasi ketika nama simbol belum diketahui, dan
+`code_graph` untuk menelusuri relasi simbol yang sudah bernama.
 
 Indeks disimpan sebagai JSON di `~/.boo/indexes/<hash-workspace>/`—tanpa database
 atau service tambahan. Pemindaian berikutnya memakai ulang metadata file yang
@@ -375,6 +376,30 @@ komentar, string literal, serta source penuh tidak disimpan. File sensitif, bine
 symlink ke luar workspace, file di atas 512 KB, dependency, dan hasil build
 dilewati. Cache dibatasi 30 MB, ditulis atomik dengan izin file `600` dan folder
 `700`; repository yang melewati batas tetap dapat dicari di memori proses aktif.
+
+### Graf simbol dari AST
+
+Tool `code_graph` menjawab pertanyaan yang tidak terjawab oleh pencarian teks: di
+mana sebuah simbol didefinisikan, siapa yang memanggilnya, apa yang ia panggil, dan
+apa yang diwarisinya. Untuk JavaScript dan TypeScript, relasi ini diambil dari AST
+memakai compiler TypeScript, bukan tebakan regex, sehingga nama yang sama di file
+berbeda tidak tercampur dan pemanggilan lewat properti tetap terbaca.
+
+```
+› siapa yang memanggil resolveInWorkspace?
+  ● Exploring     1 search  0.9s
+```
+
+Hasilnya memuat definisi beserta rentang barisnya, pemanggil, yang dipanggil, dan
+rantai pewarisan, semuanya merujuk baris source terbaru. Bahasa lain tetap
+mendapat deklarasi dan import dari pembacaan berbasis pola, ditandai `fallback`,
+jadi tool ini tidak pernah menolak menjawab hanya karena bahasanya belum didukung
+penuh.
+
+Compiler TypeScript berukuran belasan megabyte, jadi ia **tidak ikut dibundel** ke
+dalam berkas CLI. Ia dipasang sebagai dependency paket dan dimuat sekali saat
+analisis AST pertama dibutuhkan; bila tidak tersedia di mesin itu, analisis turun
+ke mode `fallback` tanpa error. Paket rilis tetap sekitar satu megabyte.
 
 Tool `diagnostics` mendeteksi pemeriksaan statis yang sudah dikonfigurasi proyek,
 misalnya script `typecheck`/`lint`, `go vet`, `cargo check`, `dart analyze`,
@@ -1396,6 +1421,7 @@ lalu membaca berkas utuh — cara itu lambat dan cepat menghabiskan anggaran kon
 | `glob` | mencari berkas berdasarkan pola nama, misalnya `src/**/*.ts`; terakhir diubah lebih dulu |
 | `grep` | mencari isi berkas dengan regex; hasil berupa `path:baris: isi` |
 | `code_search` | meranking kode secara konseptual dari path, simbol, identifier, import, dan dependency |
+| `code_graph` | definisi, pemanggil, yang dipanggil, dan pewarisan satu simbol dari AST |
 | `test_impact` | menemukan test terdampak dan command test yang terkonfigurasi tanpa menjalankannya |
 | `repo_map` | outline file dan deklarasi lintas bahasa dengan filter query/path |
 | `git_status` / `git_diff` | membaca perubahan repository tanpa shell bebas |
@@ -2012,6 +2038,7 @@ penerima.
 | `glob` | aman | langsung jalan |
 | `grep` | aman | langsung jalan |
 | `code_search` | aman | mencari konsep lewat indeks repository lokal |
+| `code_graph` | aman | membaca graf simbol AST dari indeks lokal |
 | `test_impact` | aman | menganalisis test terdampak dan command dari manifest/config proyek |
 | `repo_map` | aman | memetakan deklarasi tanpa mengirim isi file penuh |
 | `web_search` | aman | mencari web publik dan mengembalikan URL sumber |

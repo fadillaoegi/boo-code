@@ -5,23 +5,23 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { analyzeRepositorySource, extractRepositorySymbols, repoMapTool } from '../src/tools/repoMap.ts'
 
-test('ekstraksi simbol mengenali deklarasi beberapa bahasa dan nomor baris', () => {
-  assert.deepEqual(extractRepositorySymbols('import x from "x"\nexport class Agent {}\nasync function run() {}\n', '.ts'), [
+test('ekstraksi simbol mengenali deklarasi beberapa bahasa dan nomor baris', async () => {
+  assert.deepEqual(await extractRepositorySymbols('import x from "x"\nexport class Agent {}\nasync function run() {}\n', '.ts'), [
     { line: 2, endLine: 2, kind: 'class', name: 'Agent', exported: true },
     { line: 3, endLine: 3, kind: 'function', name: 'run' },
   ])
-  assert.deepEqual(extractRepositorySymbols('class Worker:\n    async def execute(self):\n        pass\n', '.py'), [
+  assert.deepEqual(await extractRepositorySymbols('class Worker:\n    async def execute(self):\n        pass\n', '.py'), [
     { line: 1, kind: 'class', name: 'Worker' },
     { line: 2, kind: 'def', name: 'execute' },
   ])
-  assert.deepEqual(extractRepositorySymbols('type Server struct {}\nfunc (s *Server) Start() {}\n', '.go'), [
+  assert.deepEqual(await extractRepositorySymbols('type Server struct {}\nfunc (s *Server) Start() {}\n', '.go'), [
     { line: 1, kind: 'type', name: 'Server' },
     { line: 2, kind: 'func', name: 'Start' },
   ])
 })
 
-test('parser TypeScript membangun simbol bertingkat, call, import, dan inheritance', () => {
-  const analysis = analyzeRepositorySource([
+test('parser TypeScript membangun simbol bertingkat, call, import, dan inheritance', async () => {
+  const analysis = await analyzeRepositorySource([
     "import { loadUser } from './repository'",
     'export class SessionManager extends BaseSession implements Runnable {',
     '  async validateCredentials(id: string) { return loadUser(id) }',

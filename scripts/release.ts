@@ -25,6 +25,17 @@ const manifest = JSON.parse(readFileSync(join(cliDirectory, 'package.json'), 'ut
   version: string
   description: string
 }
+const workspaceManifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+  devDependencies: Record<string, string>
+}
+
+/**
+ * Compiler TypeScript dipakai saat berjalan oleh analisis AST (repo_map dan
+ * code_graph), tetapi tidak ikut dibundel: sepuluh megabyte di dalam satu berkas
+ * membuat paket berat dan sulit diperbarui. Ia dipasang sebagai dependency biasa
+ * dan dimuat saat dibutuhkan; bila hilang, analisis jatuh ke mode fallback.
+ */
+const RUNTIME_DEPENDENCIES = { typescript: workspaceManifest.devDependencies.typescript }
 
 /** Versi Node terendah yang diuji: fs.glob dan path.matchesGlob stabil tanpa peringatan. */
 const MINIMUM_NODE = '22.12'
@@ -45,6 +56,7 @@ await build({
   outfile,
   legalComments: 'none',
   logLevel: 'warning',
+  external: [...Object.keys(RUNTIME_DEPENDENCIES), 'esbuild'],
   define: {
     __BOO_WEB_ASSETS__: JSON.stringify(webAssets),
   },
@@ -58,6 +70,7 @@ writeFileSync(join(packageDirectory, 'package.json'), `${JSON.stringify({
   type: 'module',
   bin: { 'boo-code': './dist/boo-code.js', boo: './dist/boo-code.js' },
   files: ['dist', 'README.md'],
+  dependencies: RUNTIME_DEPENDENCIES,
   engines: { node: `>=${MINIMUM_NODE}` },
   author: 'FLdev',
   license: 'UNLICENSED',
