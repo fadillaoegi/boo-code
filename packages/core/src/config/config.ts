@@ -21,6 +21,17 @@ import { dirname, join } from 'node:path'
 const BOO_KEYS = [
   'NINEROUTER_URL',
   'NINEROUTER_KEY',
+  // Penyedia model selain 9Router; definisinya ada di provider/profiles.ts.
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'OPENROUTER_API_KEY',
+  'OPENROUTER_BASE_URL',
+  'OLLAMA_API_KEY',
+  'OLLAMA_BASE_URL',
+  'CUSTOM_API_KEY',
+  'CUSTOM_API_URL',
   'BOO_MODEL',
   'BOO_EFFORT',
   'BOO_MAX_CONTEXT_TOKENS',

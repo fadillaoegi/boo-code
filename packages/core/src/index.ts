@@ -9,6 +9,19 @@ export type { ExpandedPromptReferences, PromptReference } from './agent/referenc
 export type { DelegatedResult, DelegatedTask, Tool, ToolContext, ToolRegistry, ToolResult, ToolResultReader, ToolRisk, UserAnswer, UserAsker, UserQuestion, UserQuestionOption } from './domain/tool.ts'
 export { createRegistry } from './domain/tool.ts'
 export { httpError, NineRouterProvider, ProviderError } from './provider/nineRouter.ts'
+export {
+  defaultProfile,
+  DEFAULT_PROVIDER_ID,
+  MODEL_ID_SEPARATOR,
+  PROVIDER_DEFINITIONS,
+  profilesFromConfig,
+  providerDefinition,
+  providerLabel,
+  qualifyModelId,
+  splitModelId,
+} from './provider/profiles.ts'
+export type { ProviderDefinition, ProviderProfile, WireFormat } from './provider/profiles.ts'
+export { listAnthropicModels, streamAnthropic, toAnthropicRequest, toAnthropicTools } from './provider/anthropic.ts'
 export { acceptedEffort, describeSelection, effortLabel, FEATURED_FAMILIES, findSelection, groupModels, humanizeModel } from './provider/models.ts'
 export type { EffortOption, EffortSource, ModelFamily } from './provider/models.ts'
 export { AutoModelRouter, assessLocally, DIFFICULTY_LABEL, parseAssessment, selectAutoModel } from './provider/auto.ts'

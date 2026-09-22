@@ -28,6 +28,7 @@ import {
   type ModelMode,
   type SandboxStatus,
   type ToolRegistry,
+  profilesFromConfig,
 } from '@boo/core'
 import { loadConfig } from '@boo/core/config/config.ts'
 import { SessionRecorder } from '@boo/core/session/sessions.ts'
@@ -233,7 +234,8 @@ export async function runExec(rawArgs: readonly string[], workspace = process.cw
   const registry = createDefaultRegistry()
   const provider = new NineRouterProvider({
     baseUrl: config.NINEROUTER_URL || DEFAULT_BASE_URL,
-    apiKey: config.NINEROUTER_KEY,
+    apiKey: config.NINEROUTER_KEY ?? '',
+    profiles: profilesFromConfig(config),
     model,
     reasoningEffort: effort,
     home: homedir(),

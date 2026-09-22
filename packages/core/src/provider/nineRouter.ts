@@ -15,6 +15,11 @@ import { homedir } from 'node:os'
 import { imageDataUrl } from '../agent/attachments.ts'
 import type { Message, ToolCall, ToolSchema } from '../domain/message.ts'
 import { redactOutboundMessages } from '../security/redaction.ts'
+import { listAnthropicModels, streamAnthropic } from './anthropic.ts'
+import { connectionError, errorMessage, httpError, ProviderError } from './errors.ts'
+import { defaultProfile, splitModelId, qualifyModelId, type ProviderProfile } from './profiles.ts'
+
+export { connectionError, httpError, ProviderError } from './errors.ts'
 
 export interface ProviderOptions {
   baseUrl: string
@@ -27,6 +32,14 @@ export interface ProviderOptions {
    */
   reasoningEffort?: string
   timeoutMs?: number
+  /**
+   * Penyedia yang tersedia. Yang pertama melayani model tanpa awalan; sisanya
+   * dipilih lewat awalan id model seperti `anthropic:`. Tanpa daftar ini, Boo
+   * memakai `baseUrl` dan `apiKey` di atas sebagai satu-satunya penyedia.
+   */
+  profiles?: ProviderProfile[]
+  /** Batas token keluaran untuk penyedia yang mewajibkannya, seperti Anthropic. */
+  maxOutputTokens?: number
   /** Root penyimpanan attachment; terutama diganti pada test. */
   home?: string
 }
@@ -85,15 +98,6 @@ class ToolCallAccumulator {
   }
 }
 
-function errorMessage(rawBody: string, status: number): string {
-  try {
-    const parsed = JSON.parse(rawBody) as { error?: { message?: string } }
-    return parsed.error?.message || `9Router merespons HTTP ${status}.`
-  } catch {
-    return `9Router merespons HTTP ${status}.`
-  }
-}
-
 type WireMessage = Omit<Message, 'content' | 'images'> & {
   content?: string | null | Array<
     | { type: 'text'; text: string }
@@ -115,57 +119,6 @@ function wireMessages(messages: readonly Message[], home: string, apiKey: string
       ],
     }
   })
-}
-
-/** Status yang biasanya pulih sendiri: limit, dan gangguan di sisi server. */
-const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504, 529])
-/** Jeda dari 9Router lebih lama dari ini tidak ditunggu otomatis. */
-const MAX_RETRY_AFTER_MS = 60_000
-
-/**
- * Kegagalan memanggil model, beserta apakah layak diulang.
- *
- * 9Router membungkus error provider di pesannya — `[codex/gpt-5.6] [429]: …` —
- * dan menambahkan `(reset after 20s)` pada error apa pun, termasuk permintaan
- * yang memang salah. Karena itu keputusan mengulang diambil dari status, bukan
- * dari ada-tidaknya jeda: permintaan 400 yang diulang hanya gagal lagi.
- */
-export class ProviderError extends Error {
-  readonly status: number | undefined
-  readonly retryable: boolean
-  /** Jeda yang diminta 9Router sebelum model ini dapat dipakai lagi. */
-  readonly retryAfterMs: number | undefined
-
-  constructor(message: string, options: { status?: number; retryable: boolean; retryAfterMs?: number }) {
-    super(message)
-    this.name = 'ProviderError'
-    this.status = options.status
-    this.retryable = options.retryable
-    this.retryAfterMs = options.retryAfterMs
-  }
-}
-
-/** Mengklasifikasikan respons HTTP yang gagal. */
-export function httpError(rawBody: string, status: number): ProviderError {
-  let message = errorMessage(rawBody, status)
-  // Status provider di dalam pesan lebih jujur daripada status HTTP 9Router sendiri.
-  const inner = /\[(\d{3})\]:/.exec(message)
-  const effective = inner ? Number(inner[1]) : status
-  const reset = /reset after (\d+)\s*s/i.exec(message)
-  const retryAfterMs = reset ? Number(reset[1]) * 1_000 : undefined
-  const retryable = TRANSIENT_STATUS.has(effective) && (retryAfterMs === undefined || retryAfterMs <= MAX_RETRY_AFTER_MS)
-  if (effective === 400 && /(?:image|vision|multimodal|image_url)/i.test(message)) {
-    message = `${message}\nModel ini mungkin tidak mendukung input gambar; pilih model vision-capable atau gunakan mode Auto.`
-  }
-  return new ProviderError(message, { status: effective, retryable, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) })
-}
-
-/** Koneksi putus atau tidak ada data sama sekali selama batas waktu: layak diulang. */
-function connectionError(error: unknown, idle: boolean): ProviderError {
-  if (idle) return new ProviderError('9Router tidak mengirim data apa pun terlalu lama.', { retryable: true })
-  const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : ''
-  const detail = error instanceof Error ? error.message : 'error tak dikenal'
-  return new ProviderError(`Koneksi ke 9Router gagal (${detail}${cause}).`, { retryable: true })
 }
 
 export class NineRouterProvider {
@@ -192,23 +145,55 @@ export class NineRouterProvider {
     this.options.reasoningEffort = effort
   }
 
+  /** Penyedia yang dikonfigurasi; bawaannya satu penyedia dari baseUrl dan apiKey. */
+  get profiles(): ProviderProfile[] {
+    const configured = this.options.profiles
+    if (configured?.length) return configured
+    return [{ id: 'ninerouter', label: '9Router', baseUrl: this.options.baseUrl, apiKey: this.options.apiKey, wire: 'openai' }]
+  }
+
+  /** Memecah id model menjadi penyedia dan nama model di sisi penyedia itu. */
+  private resolve(modelId: string): { profile: ProviderProfile; model: string } {
+    const { providerId, model } = splitModelId(modelId)
+    const profiles = this.profiles
+    const profile = providerId ? profiles.find((candidate) => candidate.id === providerId) : defaultProfile(profiles)
+    if (!profile) {
+      throw new ProviderError(
+        providerId
+          ? `Penyedia "${providerId}" belum dikonfigurasi. Jalankan: boo-code setup`
+          : 'Belum ada penyedia model yang dikonfigurasi. Jalankan: boo-code setup',
+        { retryable: false },
+      )
+    }
+    return { profile, model }
+  }
+
   /** Provider penilai memakai koneksi yang sama tanpa mengganti model agent. */
   fork(model: string, reasoningEffort?: string): NineRouterProvider {
     return new NineRouterProvider({ ...this.options, model, reasoningEffort, timeoutMs: 12_000 })
   }
 
-  /** Daftar model yang tersedia di instance 9Router. */
+  /**
+   * Daftar model dari seluruh penyedia yang dikonfigurasi. Model penyedia utama
+   * tampil polos; sisanya diberi awalan penyedia. Penyedia yang sedang bermasalah
+   * dilewati agar satu kunci yang kedaluwarsa tidak menutup seluruh daftar.
+   */
   async listModels(signal?: AbortSignal): Promise<string[]> {
-    const { baseUrl, apiKey, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
-    const endpoint = new URL('v1/models', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
-    const response = await fetch(endpoint, {
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
-    })
-    const raw = await response.text()
-    if (!response.ok) throw new Error(errorMessage(raw, response.status))
-    const body = JSON.parse(raw) as { data?: Array<{ id?: string }> }
-    return (body.data ?? []).map((model) => model.id).filter((id): id is string => Boolean(id))
+    const { timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
+    const profiles = this.profiles
+    const primary = defaultProfile(profiles)
+    const lists = await Promise.all(profiles.map(async (profile) => {
+      try {
+        const ids = profile.wire === 'anthropic'
+          ? await listAnthropicModels(profile, timeoutMs, signal)
+          : await listOpenAiModels(profile, timeoutMs, signal)
+        return ids.map((id) => profile === primary ? id : qualifyModelId(profile.id, id))
+      } catch (error) {
+        if (profiles.length === 1) throw error
+        return []
+      }
+    }))
+    return lists.flat()
   }
 
   /**
@@ -221,12 +206,27 @@ export class NineRouterProvider {
     tools: ToolSchema[],
     signal?: AbortSignal,
   ): AsyncGenerator<StreamEvent, CompletionResult> {
-    const { baseUrl, apiKey, model, reasoningEffort, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
+    const { model: requestedModel, reasoningEffort, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
+    const { profile, model } = this.resolve(requestedModel)
+    const { baseUrl, apiKey } = profile
     const endpoint = new URL('v1/chat/completions', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
     let outboundMessages: WireMessage[]
     try { outboundMessages = wireMessages(messages, this.options.home ?? homedir(), apiKey) } catch (error) {
       if (error instanceof ProviderError) throw error
       throw new ProviderError(error instanceof Error ? error.message : 'Attachment gambar tidak dapat dibaca.', { retryable: false })
+    }
+
+    if (profile.wire === 'anthropic') {
+      return yield* streamAnthropic({
+        profile,
+        model,
+        messages: outboundMessages,
+        tools,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(this.options.maxOutputTokens ? { maxOutputTokens: this.options.maxOutputTokens } : {}),
+        timeoutMs,
+        ...(signal ? { signal } : {}),
+      })
     }
 
     // Batas waktu dihitung sejak data terakhir, bukan sejak permintaan dimulai:
@@ -365,4 +365,17 @@ export class NineRouterProvider {
       },
     }
   }
+}
+
+/** Daftar model dari penyedia berbentuk OpenAI. */
+async function listOpenAiModels(profile: ProviderProfile, timeoutMs: number, signal?: AbortSignal): Promise<string[]> {
+  const base = profile.baseUrl.endsWith('/') ? profile.baseUrl : `${profile.baseUrl}/`
+  const response = await fetch(new URL('v1/models', base), {
+    headers: { ...(profile.apiKey ? { Authorization: `Bearer ${profile.apiKey}` } : {}), Accept: 'application/json' },
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
+  })
+  const raw = await response.text()
+  if (!response.ok) throw new Error(errorMessage(raw, response.status))
+  const body = JSON.parse(raw) as { data?: { id?: string }[] }
+  return (body.data ?? []).map((model) => model.id).filter((id): id is string => Boolean(id))
 }

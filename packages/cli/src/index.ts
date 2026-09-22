@@ -90,6 +90,8 @@ import {
   type RepairResult,
   type UserAnswer,
   type UserQuestion,
+  profilesFromConfig,
+  type ProviderProfile,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from '@boo/core/config/config.ts'
 import { openBrowser, startWeb } from '@boo/web'
@@ -423,13 +425,15 @@ function validEffort(model: string, effort: string | undefined): string | undefi
   return acceptedEffort(model, effort)
 }
 
-function requireKey(key: string | undefined): string {
-  if (key) return key
-  console.error(theme.danger('NINEROUTER_KEY belum dikonfigurasi.'))
-  console.error(theme.muted(`Buat ${GLOBAL_CONFIG_PATH} berisi:`))
+/** Penyedia model yang dikonfigurasi; berhenti dengan petunjuk bila belum ada. */
+function requireProviders(config: Record<string, string | undefined>): ProviderProfile[] {
+  const profiles = profilesFromConfig(config)
+  if (profiles.length) return profiles
+  console.error(theme.danger('Belum ada penyedia model yang dikonfigurasi.'))
+  console.error(theme.muted(`Jalankan ${COMMAND} setup, atau isi ${GLOBAL_CONFIG_PATH}:`))
   console.error(theme.muted('  NINEROUTER_URL=http://localhost:20128'))
   console.error(theme.muted('  NINEROUTER_KEY=sk-...  (dari Dashboard 9Router)'))
-  console.error(theme.muted('Atau letakkan .env.local di direktori kerja.'))
+  console.error(theme.muted('Penyedia lain: OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OLLAMA_BASE_URL, CUSTOM_API_URL.'))
   process.exit(1)
 }
 
@@ -480,7 +484,7 @@ async function main() {
 
   const workspace = process.cwd()
   let config = loadConfig(workspace)
-  const setupDefaults = () => ({ url: config.NINEROUTER_URL, key: config.NINEROUTER_KEY, model: config.BOO_MODEL })
+  const setupDefaults = () => ({ url: config.NINEROUTER_URL, key: config.NINEROUTER_KEY, model: config.BOO_MODEL, config })
   if (process.argv[2] === 'setup') {
     process.exit(await runSetup(setupDefaults()) ? 0 : 1)
   }
@@ -490,13 +494,13 @@ async function main() {
     return
   }
   // Pertama kali dijalankan di mesin ini: tawarkan setup, bukan pesan error.
-  if (!config.NINEROUTER_KEY && stdin.isTTY) {
+  if (!profilesFromConfig(config).length && stdin.isTTY) {
     console.log(`\n  ${theme.muted('Boo Code belum dikonfigurasi di mesin ini.')}`)
     if (!await runSetup(setupDefaults())) process.exit(1)
     config = loadConfig(workspace)
   }
   if (process.argv[2] === 'web') {
-    requireKey(config.NINEROUTER_KEY)
+    requireProviders(config)
     const running = await startWeb({ workspace, config: { ...config, BOO_MODEL: flagValue('model', 'm') || config.BOO_MODEL, BOO_EFFORT: flagValue('effort') || config.BOO_EFFORT, BOO_SANDBOX: flagValue('sandbox') || config.BOO_SANDBOX }, version: version(), port: webPort() })
     console.log(`\n  ${theme.accentBold('Boo Code web')} berjalan untuk ${workspace}`)
     console.log(`  ${theme.muted('Buka di browser:')} ${running.server.openUrl}`)
@@ -530,9 +534,11 @@ async function main() {
     console.error(theme.muted(`Tingkat "${requestedEffort}" tidak berlaku untuk ${model}; diabaikan.`))
   }
 
+  const profiles = requireProviders(config)
   const provider = new NineRouterProvider({
     baseUrl: config.NINEROUTER_URL || DEFAULT_BASE_URL,
-    apiKey: requireKey(config.NINEROUTER_KEY),
+    apiKey: config.NINEROUTER_KEY ?? '',
+    profiles,
     model,
     reasoningEffort,
     home: homedir(),

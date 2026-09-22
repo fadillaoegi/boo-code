@@ -79,6 +79,7 @@ import {
   type SpecTask,
   type UserAnswer,
   type UserQuestion,
+  profilesFromConfig,
 } from '@boo/core'
 import type { BooKey } from '@boo/core/config/config.ts'
 import { describeRequest, languageOf } from '@boo/core/presentation/approval.ts'
@@ -176,6 +177,7 @@ export class WebController {
     const providerOptions: ProviderOptions = {
       baseUrl: options.config.NINEROUTER_URL || DEFAULT_BASE_URL,
       apiKey: options.config.NINEROUTER_KEY ?? '',
+      profiles: profilesFromConfig(options.config),
       model,
       reasoningEffort: this.modelMode === 'auto' ? undefined : acceptedEffort(model, options.config.BOO_EFFORT),
       home: options.home ?? homedir(),

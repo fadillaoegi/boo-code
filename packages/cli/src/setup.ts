@@ -8,7 +8,15 @@
 
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
-import { NineRouterProvider } from '@boo/core'
+import {
+  listAnthropicModels,
+  NineRouterProvider,
+  PROVIDER_DEFINITIONS,
+  profilesFromConfig,
+  qualifyModelId,
+  type ProviderDefinition,
+  type ProviderProfile,
+} from '@boo/core'
 import { GLOBAL_CONFIG_PATH, updateEnvFile } from '@boo/core/config/config.ts'
 import { theme } from './theme.ts'
 
@@ -70,55 +78,137 @@ export interface SetupDefaults {
   url?: string
   key?: string
   model?: string
+  /** Setelan yang sudah ada, agar penyedia yang terpasang dapat ditandai. */
+  config?: Record<string, string | undefined>
 }
 
-/** Menjalankan wizard; mengembalikan true bila setelan tersimpan. */
-export async function runSetup(defaults: SetupDefaults): Promise<boolean> {
-  console.log(`\n  ${theme.accentBold('Setup Boo Code')}`)
-  console.log(`  ${theme.muted(`Setelan disimpan di ${GLOBAL_CONFIG_PATH} dan hanya dapat dibaca akunmu.`)}\n`)
+/** Nilai setelan yang akan ditulis ke ~/.boo/.env. */
+type Settings = Record<string, string>
 
-  const urlDefault = defaults.url || DEFAULT_BASE_URL
-  const urlAnswer = await askLine(`  Alamat 9Router ${theme.muted(`[${urlDefault}]`)}: `)
-  if (urlAnswer === null) return false
+function describeConfigured(definition: ProviderDefinition, config: Record<string, string | undefined>): string {
+  const profiles = profilesFromConfig(config)
+  return profiles.some((profile) => profile.id === definition.id) ? theme.accent(' · terpasang') : ''
+}
+
+/** Memeriksa koneksi satu penyedia; mengembalikan daftar model yang terbaca. */
+async function probe(profile: ProviderProfile): Promise<string[]> {
+  if (profile.wire === 'anthropic') return listAnthropicModels(profile, 15_000)
+  return new NineRouterProvider({ baseUrl: profile.baseUrl, apiKey: profile.apiKey, profiles: [profile], model: '', timeoutMs: 15_000 }).listModels()
+}
+
+/**
+ * Menambahkan satu penyedia: alamat, kunci (tanpa tampil di layar), lalu
+ * pemeriksaan koneksi. Mengembalikan setelan yang perlu ditulis, atau null bila
+ * dibatalkan.
+ */
+async function addProvider(definition: ProviderDefinition, config: Record<string, string | undefined>): Promise<{ settings: Settings; models: string[] } | null> {
+  console.log(`\n  ${theme.accentBold(definition.label)} ${theme.muted(`· ${definition.hint}`)}`)
+
+  const urlDefault = (config[definition.urlName] ?? '').trim() || definition.defaultBaseUrl
+  const urlAnswer = await askLine(`  Alamat API ${theme.muted(urlDefault ? `[${urlDefault}]` : '(wajib diisi)')}: `)
+  if (urlAnswer === null) return null
   const url = urlAnswer.trim() || urlDefault
+  if (!url) {
+    console.log(`  ${theme.danger('Alamat API wajib diisi untuk penyedia ini.')}`)
+    return null
+  }
   try {
     new URL(url)
   } catch {
-    console.log(`  ${theme.danger(`"${url}" bukan alamat yang sah.`)}\n`)
-    return false
+    console.log(`  ${theme.danger(`"${url}" bukan alamat yang sah.`)}`)
+    return null
   }
 
-  const keyHint = defaults.key ? theme.muted(' [enter: pakai kunci yang tersimpan]') : theme.muted(' (dari Dashboard 9Router)')
-  const keyAnswer = await askSecret(`  Kunci API${keyHint}: `)
-  if (keyAnswer === null) return false
-  const key = keyAnswer.trim() || defaults.key || ''
-  if (!key) {
-    console.log(`  ${theme.danger('Kunci API wajib diisi.')}\n`)
-    return false
+  const existingKey = (config[definition.keyName] ?? '').trim()
+  const keyHint = existingKey
+    ? ' [enter: pakai kunci yang tersimpan]'
+    : definition.keyRequired ? ` (dari ${definition.keySource})` : ' [enter: tanpa kunci]'
+  const keyAnswer = await askSecret(`  Kunci API${theme.muted(keyHint)}: `)
+  if (keyAnswer === null) return null
+  const key = keyAnswer.trim() || existingKey
+  if (!key && definition.keyRequired) {
+    console.log(`  ${theme.danger('Kunci API wajib diisi untuk penyedia ini.')}`)
+    return null
   }
 
+  const profile: ProviderProfile = { id: definition.id, label: definition.label, baseUrl: url, apiKey: key, wire: definition.wire }
   stdout.write(`  ${theme.muted('Memeriksa koneksi…')}`)
   let models: string[] = []
   try {
-    models = await new NineRouterProvider({ baseUrl: url, apiKey: key, model: '', timeoutMs: 15_000 }).listModels()
-    stdout.write(`\r  ${theme.accent('✓')} Terhubung ke 9Router · ${models.length} model tersedia\n`)
+    models = await probe(profile)
+    stdout.write(`\r  ${theme.accent('✓')} Terhubung ke ${definition.label} · ${models.length} model tersedia\n`)
   } catch (error) {
     stdout.write(`\r  ${theme.danger('✗')} Tidak dapat terhubung: ${error instanceof Error ? error.message : 'error tak dikenal'}\n`)
     const keep = await askLine(`  Simpan setelan ini tetap? ${theme.muted('[y/N]')} `)
-    if (keep?.trim().toLowerCase() !== 'y') return false
+    if (keep?.trim().toLowerCase() !== 'y') return null
   }
 
+  return {
+    settings: { [definition.urlName]: url, ...(key ? { [definition.keyName]: key } : {}) },
+    models: models.map((id) => qualifyModelId(definition.id, id)),
+  }
+}
+
+/**
+ * Wizard setup: memasang satu atau beberapa penyedia model, lalu memilih model
+ * bawaan. Mengembalikan true bila ada setelan yang tersimpan.
+ */
+export async function runSetup(defaults: SetupDefaults): Promise<boolean> {
+  console.log(`\n  ${theme.accentBold('Setup Boo Code')}`)
+  console.log(`  ${theme.muted(`Setelan disimpan di ${GLOBAL_CONFIG_PATH} dan hanya dapat dibaca akunmu.`)}`)
+  console.log(`  ${theme.muted('Kunci langganan Codex CLI dan Claude Code tidak dipakai; gunakan kunci API resmi atau 9Router.')}`)
+
+  const config: Record<string, string | undefined> = {
+    ...defaults.config,
+    ...(defaults.url ? { NINEROUTER_URL: defaults.url } : {}),
+    ...(defaults.key ? { NINEROUTER_KEY: defaults.key } : {}),
+  }
+  const settings: Settings = {}
+  const models: string[] = []
+  let added = 0
+
+  for (;;) {
+    console.log(`\n  ${theme.bold('Penyedia model')}`)
+    PROVIDER_DEFINITIONS.forEach((definition, index) => {
+      console.log(`  ${theme.muted(String(index + 1).padStart(3))}  ${definition.label}${describeConfigured(definition, config)} ${theme.muted(`· ${definition.hint}`)}`)
+    })
+    const prompt = added || profilesFromConfig(config).length
+      ? `\n  ${theme.muted('nomor penyedia [enter: lanjut ke model] ')}`
+      : `\n  ${theme.muted('nomor penyedia [enter: batal] ')}`
+    const answer = (await askLine(prompt))?.trim()
+    if (!answer) break
+    const choice = Number(answer)
+    const definition = Number.isInteger(choice) ? PROVIDER_DEFINITIONS[choice - 1] : undefined
+    if (!definition) {
+      console.log(`  ${theme.danger('Pilihan tidak dikenal.')}`)
+      continue
+    }
+    const result = await addProvider(definition, config)
+    if (!result) continue
+    Object.assign(settings, result.settings)
+    Object.assign(config, result.settings)
+    models.push(...result.models)
+    added += 1
+  }
+
+  if (!added && !Object.keys(settings).length) {
+    console.log(`\n  ${theme.muted('Tidak ada yang diubah.')}\n`)
+    return false
+  }
+
+  // "auto" membiarkan Boo memilih model per permintaan; itu bawaan yang aman.
   const modelDefault = defaults.model && (defaults.model === 'auto' || !models.length || models.includes(defaults.model))
     ? defaults.model
     : 'auto'
+  console.log(`\n  ${theme.muted('Model bawaan: "auto" membiarkan Boo memilih sendiri per permintaan.')}`)
+  if (models.length) console.log(`  ${theme.muted(`Contoh: ${models.slice(0, 3).join(', ')}`)}`)
   const modelAnswer = await askLine(`  Model bawaan ${theme.muted(`[${modelDefault}]`)}: `)
-  if (modelAnswer === null) return false
-  const model = modelAnswer.trim() || modelDefault
+  const model = (modelAnswer ?? '').trim() || modelDefault
   if (model !== 'auto' && models.length && !models.includes(model)) {
-    console.log(`  ${theme.muted(`Catatan: ${model} tidak ada di daftar model 9Router saat ini.`)}`)
+    console.log(`  ${theme.muted(`Catatan: ${model} tidak ada di daftar model penyedia yang baru dipasang.`)}`)
   }
 
-  updateEnvFile(GLOBAL_CONFIG_PATH, { NINEROUTER_URL: url, NINEROUTER_KEY: key, BOO_MODEL: model })
+  updateEnvFile(GLOBAL_CONFIG_PATH, { ...settings, BOO_MODEL: model })
   console.log(`\n  ${theme.accent('✓')} Tersimpan. Model dan tingkat penalaran dapat diganti kapan saja dengan /model.\n`)
   return true
 }

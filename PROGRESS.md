@@ -14,8 +14,9 @@ fungsi, perintah verifikasi).
 
 - **Tanggal:** 2026-09-23
 - **Dikerjakan oleh:** Claude Code (melanjutkan sesi Codex yang terhenti karena limit)
-- **Verifikasi:** `pnpm typecheck`, `pnpm test` (502 lolos), `pnpm -s lint`, dan
-  `pnpm release` — semuanya bersih.
+- **Verifikasi:** `pnpm typecheck`, `pnpm test` (510 lolos), `pnpm -s lint`, dan
+  `pnpm release` — semuanya bersih. Uji asap ke 9Router sungguhan lewat
+  `boo-code exec` dan `boo-code doctor` juga berhasil.
 - **Git:** semua pekerjaan sudah di-commit; tidak ada yang menggantung.
 
 ## Sudah selesai
@@ -32,19 +33,20 @@ fungsi, perintah verifikasi).
   bahasa tanpa parser tetap dilayani mode `fallback`. Didokumentasikan di README
   bagian "Graf simbol dari AST".
 
-## Sedang dikerjakan
+- **Dukungan banyak penyedia model dan wizard kunci API** — selesai, lihat di bawah.
+  Yang belum: mencoba jalur Anthropic dengan kunci sungguhan (baru diuji lewat
+  server tiruan di `packages/core/tests/providers.test.ts`), dan formulir kunci di
+  antarmuka web (sekarang penyedia hanya diatur lewat `boo-code setup`).
 
-- **Dukungan banyak penyedia model dan wizard kunci API** (permintaan pengguna).
-  Rencana: (1) penyedia OpenAI-compatible — OpenAI, OpenRouter, Groq, Ollama,
-  LM Studio, alamat sendiri — dan wizard `boo-code setup` bertahap untuk banyak
-  penyedia; (2) adapter Anthropic (`/v1/messages`, `x-api-key`, bentuk tool dan
-  streaming berbeda).
-  Catatan penting: kredensial langganan Codex CLI dan Claude Code **tidak** dipakai;
-  hanya kunci API resmi atau lewat 9Router.
-  Keadaan sekarang: belum dimulai; kode masih satu penyedia
-  (`packages/core/src/provider/nineRouter.ts`), kunci ada di
-  `packages/core/src/config/config.ts` (`NINEROUTER_URL`, `NINEROUTER_KEY`), wizard
-  di `packages/cli/src/setup.ts`.
+## Sudah selesai (lanjutan)
+
+- **Banyak penyedia model** — `packages/core/src/provider/profiles.ts` mendaftarkan
+  9Router, OpenAI, Anthropic, OpenRouter, Ollama, dan alamat OpenAI-compatible lain.
+  `NineRouterProvider` menjadi gerbang: id model berawalan penyedia
+  (`anthropic:claude-sonnet-4-6`) menentukan tujuan, model tanpa awalan tetap ke
+  penyedia utama. Adapter Anthropic ada di `provider/anthropic.ts`, error bersama di
+  `provider/errors.ts`. `boo-code setup` kini memasang beberapa penyedia sekaligus,
+  `doctor` melaporkannya, dan `/model` menampilkan semuanya dalam satu daftar.
 
 ## Berikutnya (peta jalan Codex, nomor 2–10)
 

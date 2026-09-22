@@ -4,17 +4,23 @@ Coding agent buatan FLdev yang berjalan di terminal. Model diakses lewat 9Router
 
 ## Memasang
 
-Membutuhkan Node.js 22.12 atau lebih baru, dan akses ke instance 9Router.
+Membutuhkan Node.js 22.12 atau lebih baru, dan setidaknya satu penyedia model:
+9Router, OpenAI, Anthropic, OpenRouter, Ollama lokal, atau alamat OpenAI-compatible
+lain.
 
 ```bash
 npm install -g ./boo-code-0.1.0.tgz
 boo-code setup
 ```
 
-`setup` menanyakan alamat 9Router, kunci API (tidak tampil saat diketik), dan
-model bawaan, memeriksa koneksinya, lalu menyimpannya di `~/.boo/.env` dengan izin
-hanya untuk pemilik. Menjalankan `boo-code` pertama kali tanpa setelan juga
-langsung membuka setup.
+`setup` menampilkan daftar penyedia, menanyakan alamat dan kunci API (tidak tampil
+saat diketik), memeriksa koneksinya, lalu menyimpannya di `~/.boo/.env` dengan izin
+hanya untuk pemilik. Beberapa penyedia boleh dipasang sekaligus; model dari penyedia
+selain yang utama ditandai awalan seperti `anthropic:claude-sonnet-4-6`. Menjalankan
+`boo-code` pertama kali tanpa setelan juga langsung membuka setup.
+
+Kredensial langganan Codex CLI dan Claude Code tidak dipakai — keduanya diterbitkan
+untuk aplikasi itu sendiri. Pakai kunci API resmi, atau 9Router.
 
 Periksa instalasi kapan saja dengan `boo-code doctor`, atau `/doctor` dari dalam
 sesi. Pemeriksaan meliputi runtime, workspace, provider/model, izin konfigurasi,

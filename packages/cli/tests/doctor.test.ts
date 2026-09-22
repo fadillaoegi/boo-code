@@ -129,3 +129,23 @@ test('boo-code doctor berjalan tanpa memulai sesi atau menampilkan kunci', { tim
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+test('penyedia selain 9Router terdaftar, dan 9Router yang kosong bukan lagi kegagalan', async () => {
+  const input = await options({
+    config: { NINEROUTER_URL: 'http://127.0.0.1:20128', ANTHROPIC_API_KEY: 'kunci-anthropic', BOO_MODEL: 'anthropic:claude-sonnet-4-6' },
+  })
+  const checks = await diagnoseBoo(input, {
+    accessWorkspace: async () => undefined,
+    configMode: async () => 0o600,
+    listModels: async () => [],
+    command: () => ({ ok: true, output: 'git version 2.50.0' }),
+    browser: async () => 'tidak aktif',
+  })
+  const find = (id: string) => checks.find((check) => check.id === id)
+  assert.equal(find('providers')?.status, 'pass')
+  assert.match(find('providers')?.detail ?? '', /Anthropic/)
+  assert.equal(find('provider-config')?.status, 'warn', '9Router kosong hanya peringatan bila ada penyedia lain')
+  // Model berawalan penyedia tidak dinilai dari daftar model 9Router.
+  assert.equal(find('model')?.status, 'pass')
+  assert.doesNotMatch(JSON.stringify(checks), /kunci-anthropic/)
+})

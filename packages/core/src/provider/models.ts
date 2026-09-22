@@ -16,6 +16,8 @@
  * Gemini 3.5 Flash memang tidak punya varian medium.
  */
 
+import { providerLabel, splitModelId } from './profiles.ts'
+
 export type EffortSource = 'model-id' | 'parameter'
 
 export interface EffortOption {
@@ -70,17 +72,32 @@ function capitalize(word: string): string {
 
 /** Nama yang mudah dibaca untuk model tanpa aturan khusus. */
 export function humanizeModel(id: string): string {
-  const name = id.split('/').at(-1) ?? id
-  return name
+  const { providerId, model } = splitModelId(id)
+  const name = model.split('/').at(-1) ?? model
+  const readable = name
     .split('-')
     .map((part) => (/^gpt$/i.test(part) ? 'GPT' : /^oss$/i.test(part) ? 'OSS' : capitalize(part)))
     .join(' ')
     .replace(/^GPT (\d|OSS)/, 'GPT-$1')
     .replace(/(\d) (\d)/g, '$1.$2')
+  // Model dari penyedia selain yang utama disebut bersama penyedianya, karena nama
+  // model yang sama bisa tersedia dari beberapa penyedia sekaligus.
+  return providerId ? `${providerLabel(providerId)} · ${readable}` : readable
 }
 
 export function effortLabel(level: string): string {
   return EFFORT_LABEL[level] ?? capitalize(level)
+}
+
+/**
+ * Claude lewat API Anthropic menerima tingkat penalaran: Boo menerjemahkannya
+ * menjadi anggaran berpikir. Hanya keluarga yang memang mendukungnya yang diberi
+ * pilihan, agar model lain tidak menawarkan tingkat yang akan ditolak.
+ */
+function anthropicEffortLevels(id: string): string[] | undefined {
+  const { providerId, model } = splitModelId(id)
+  if (providerId !== 'anthropic') return undefined
+  return /(sonnet|opus)/i.test(model) ? ['low', 'medium', 'high', 'xhigh'] : undefined
 }
 
 function byEffort(a: EffortOption, b: EffortOption): number {
@@ -109,7 +126,7 @@ export function groupModels(ids: string[]): ModelFamily[] {
       continue
     }
 
-    const levels = PARAMETER_EFFORT_LEVELS[id]
+    const levels = PARAMETER_EFFORT_LEVELS[id] ?? anthropicEffortLevels(id)
     if (levels) {
       families.set(id, {
         key: id,

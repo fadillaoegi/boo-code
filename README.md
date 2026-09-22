@@ -27,7 +27,8 @@ pnpm release
 ```
 
 Hasilnya `release/boo-code-0.1.0.tgz`: CLI dan `@boo/core` dibundel menjadi satu
-berkas JavaScript (sekitar 200 KB) tanpa dependency. Salin tarball itu ke mesin
+berkas JavaScript (sekitar 1 MB), dengan compiler TypeScript sebagai satu-satunya
+dependency runtime — dipakai analisis AST dan dipasang otomatis oleh npm. Salin tarball itu ke mesin
 tujuan — yang cukup punya Node.js 22.12 atau lebih baru — lalu:
 
 ```bash
@@ -35,17 +36,29 @@ npm install -g ./boo-code-0.1.0.tgz
 boo-code setup
 ```
 
-`setup` menanyakan alamat 9Router, kunci API, dan model bawaan:
+`setup` memasang satu atau beberapa penyedia model, lalu memilih model bawaan:
 
 ```
   Setup Boo Code
   Setelan disimpan di ~/.boo/.env dan hanya dapat dibaca akunmu.
+  Kunci langganan Codex CLI dan Claude Code tidak dipakai; gunakan kunci API resmi atau 9Router.
 
-  Alamat 9Router [http://localhost:20128]:
-  Kunci API (dari Dashboard 9Router): ***********************************
-  ✓ Terhubung ke 9Router · 23 model tersedia
+  Penyedia model
+    1  9Router · terpasang · satu pintu untuk semua model langgananmu
+    2  OpenAI · API resmi OpenAI, dibayar per pemakaian
+    3  Anthropic · API resmi Claude, dibayar per pemakaian
+    4  OpenRouter · banyak model dari satu kunci
+    5  Ollama · model lokal di komputer ini, tanpa kunci
+    6  OpenAI-compatible lain · LM Studio, vLLM, Groq, atau alamat sendiri
+
+  nomor penyedia [enter: lanjut ke model] 3
+
+  Anthropic · API resmi Claude, dibayar per pemakaian
+  Alamat API [https://api.anthropic.com]:
+  Kunci API (dari console.anthropic.com): ***********************************
+  ✓ Terhubung ke Anthropic · 7 model tersedia
+
   Model bawaan [auto]:
-
   ✓ Tersimpan. Model dan tingkat penalaran dapat diganti kapan saja dengan /model.
 ```
 
@@ -53,8 +66,39 @@ boo-code setup
 - Isi `~/.boo/.env` yang lain (misalnya `BOO_EFFORT`) dipertahankan; berkasnya
   dikunci ke izin `600`.
 - Menjalankan `boo-code` pertama kali tanpa setelan langsung membuka setup.
-- Jalankan `boo-code setup` lagi kapan saja untuk mengganti kunci atau alamat;
-  menekan enter memakai nilai yang tersimpan.
+- Jalankan `boo-code setup` lagi kapan saja untuk menambah penyedia atau mengganti
+  kunci; menekan enter memakai nilai yang tersimpan.
+- `boo-code doctor` menampilkan penyedia yang terpasang tanpa menampilkan kuncinya.
+
+### Penyedia model
+
+Boo dapat memakai beberapa penyedia sekaligus. Model dari penyedia selain yang
+utama ditandai awalan, misalnya `anthropic:claude-sonnet-4-6`, sehingga nama model
+yang sama dari dua penyedia tidak tertukar. Model tanpa awalan berarti penyedia
+utama, jadi sesi dan setelan lama tetap berjalan apa adanya.
+
+| Penyedia | Kunci di `~/.boo/.env` | Bentuk protokol |
+|---|---|---|
+| 9Router | `NINEROUTER_URL`, `NINEROUTER_KEY` | chat-completions |
+| OpenAI | `OPENAI_API_KEY`, `OPENAI_BASE_URL` | chat-completions |
+| Anthropic | `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` | Messages API |
+| OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL` | chat-completions |
+| Ollama | `OLLAMA_BASE_URL` (tanpa kunci) | chat-completions |
+| OpenAI-compatible lain | `CUSTOM_API_URL`, `CUSTOM_API_KEY` | chat-completions |
+
+`/model` menampilkan model dari seluruh penyedia yang terpasang dalam satu daftar,
+dengan nama penyedia di depannya. Penyedia yang sedang bermasalah dilewati, jadi
+satu kunci yang kedaluwarsa tidak menutup daftar model penyedia lain.
+
+Adapter Anthropic menerjemahkan percakapan ke bentuk `/v1/messages`: pesan system
+terpisah, pemanggilan tool menjadi blok `tool_use`/`tool_result`, dan tingkat
+penalaran menjadi anggaran berpikir (`low` 2.048 token sampai `xhigh` 32.768).
+Sisanya — agent loop, izin, transkrip, sesi — tidak berubah sama sekali.
+
+**Yang tidak didukung dan alasannya:** kredensial langganan Codex CLI dan Claude
+Code. Keduanya berupa login akun yang diterbitkan untuk aplikasi itu sendiri, jadi
+Boo tidak membacanya. Untuk memakai model yang sama, pakai kunci API resmi dari
+platform masing-masing, atau 9Router yang memang menyatukan langganan itu.
 
 Paket ini sudah diuji dipasang ke prefix bersih, dijalankan dengan HOME kosong, dan
 dijalankan di Node 22 maupun 24. `release/boo-code/` berisi isi paketnya bila ingin

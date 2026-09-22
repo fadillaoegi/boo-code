@@ -4,7 +4,7 @@ import { constants } from 'node:fs'
 import { access, stat } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { homedir } from 'node:os'
-import { browserStatus, NineRouterProvider, type SandboxStatus } from '@boo/core'
+import { browserStatus, NineRouterProvider, profilesFromConfig, splitModelId, type SandboxStatus } from '@boo/core'
 
 export type DoctorCheckStatus = 'pass' | 'warn' | 'fail'
 
@@ -19,6 +19,8 @@ export interface DoctorConfig {
   NINEROUTER_URL?: string
   NINEROUTER_KEY?: string
   BOO_MODEL?: string
+  /** Kunci dan alamat penyedia lain, misalnya ANTHROPIC_API_KEY. */
+  [key: string]: string | undefined
 }
 
 export interface DoctorOptions {
@@ -106,6 +108,14 @@ export async function diagnoseBoo(options: DoctorOptions, dependencies: DoctorDe
     checks.push(fail('workspace', 'Workspace', clean(error instanceof Error ? error.message : 'tidak dapat dibaca/ditulis')))
   }
 
+  // Penyedia lain — OpenAI, Anthropic, OpenRouter, Ollama, alamat sendiri —
+  // membuat 9Router tidak lagi wajib; yang wajib adalah ada penyedia yang bisa dipakai.
+  const profiles = profilesFromConfig(options.config)
+  const others = profiles.filter((profile) => profile.id !== 'ninerouter')
+  checks.push(profiles.length
+    ? pass('providers', 'Penyedia model', profiles.map((profile) => profile.label).join(', '))
+    : fail('providers', 'Penyedia model', 'belum ada yang dikonfigurasi; jalankan boo-code setup'))
+
   let baseUrl = ''
   try {
     const parsed = new URL(options.config.NINEROUTER_URL ?? '')
@@ -116,7 +126,11 @@ export async function diagnoseBoo(options: DoctorOptions, dependencies: DoctorDe
   }
   const apiKey = options.config.NINEROUTER_KEY?.trim() ?? ''
   if (baseUrl && apiKey) checks.push(pass('provider-config', 'Konfigurasi 9Router', 'alamat dan kunci API tersedia; nilai kunci tidak ditampilkan'))
-  else if (baseUrl) checks.push(fail('provider-config', 'Konfigurasi 9Router', 'NINEROUTER_KEY belum diatur'))
+  else if (baseUrl) {
+    checks.push(others.length
+      ? warn('provider-config', 'Konfigurasi 9Router', `NINEROUTER_KEY belum diatur; memakai ${others.map((profile) => profile.label).join(', ')}`)
+      : fail('provider-config', 'Konfigurasi 9Router', 'NINEROUTER_KEY belum diatur'))
+  }
 
   const mode = await (dependencies.configMode ?? defaultConfigMode)(options.configPath)
   if (mode === null) {
@@ -139,12 +153,12 @@ export async function diagnoseBoo(options: DoctorOptions, dependencies: DoctorDe
       checks.push(fail('provider', 'Koneksi 9Router', errorDetail(error, [apiKey])))
     }
   } else {
-    checks.push(warn('provider', 'Koneksi 9Router', 'dilewati karena konfigurasi belum lengkap'))
+    checks.push(warn('provider', 'Koneksi 9Router', others.length ? 'dilewati; penyedia lain yang dipakai' : 'dilewati karena konfigurasi belum lengkap'))
   }
 
   const configuredModel = options.config.BOO_MODEL?.trim() || 'auto'
   if (configuredModel === 'auto') checks.push(pass('model', 'Model bawaan', 'Auto'))
-  else if (models.length && !models.includes(configuredModel)) checks.push(warn('model', 'Model bawaan', `${configuredModel} tidak ada dalam daftar provider saat ini`))
+  else if (models.length && !models.includes(configuredModel) && !splitModelId(configuredModel).providerId) checks.push(warn('model', 'Model bawaan', `${configuredModel} tidak ada dalam daftar provider saat ini`))
   else checks.push(pass('model', 'Model bawaan', configuredModel))
 
   const command = dependencies.command ?? defaultCommand
