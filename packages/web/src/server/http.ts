@@ -284,6 +284,21 @@ export async function startWebServer({ controller, assets, port = 0, token = ran
         json(response, 200, { ok: true })
         return
       }
+      case 'GET /api/providers':
+        json(response, 200, { providers: controller.providerStatus() })
+        return
+      case 'POST /api/providers': {
+        const body = await readJson(request)
+        // Kunci hanya masuk, tidak pernah keluar: balasannya cuma jumlah model.
+        const saved = await controller.saveProvider({
+          id: text(body.id),
+          baseUrl: text(body.baseUrl),
+          apiKey: text(body.apiKey),
+          remove: body.remove === true,
+        })
+        json(response, 200, { ok: true, models: saved.models, providers: controller.providerStatus() })
+        return
+      }
       case 'GET /api/specs':
         json(response, 200, { specs: controller.specs() })
         return

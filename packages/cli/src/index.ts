@@ -166,6 +166,8 @@ const USAGE = `${COMMAND} — coding agent oleh FLdev
   ${COMMAND} --resume <id>        langsung buka sesi tertentu
   ${COMMAND} --continue           lanjutkan sesi terakhir di direktori ini
   ${COMMAND} exec [opsi] <prompt> jalankan satu tugas headless untuk script/CI
+  ${COMMAND} web [--port N] [--no-open]
+                  buka antarmuka web lokal
   ${COMMAND} web [--port <nomor>] buka antarmuka web lokal
   ${COMMAND} --model <id>         pilih model untuk sesi ini
   ${COMMAND} --model auto         pilih model dan penalaran otomatis per tugas
@@ -505,7 +507,8 @@ async function main() {
     console.log(`\n  ${theme.accentBold('Boo Code web')} berjalan untuk ${workspace}`)
     console.log(`  ${theme.muted('Buka di browser:')} ${running.server.openUrl}`)
     console.log(`  ${theme.muted('Tekan Ctrl-C untuk menghentikan server.')}\n`)
-    openBrowser(running.server.openUrl)
+    // Di server tanpa layar, atau saat dijalankan dari skrip, browser tidak dibuka.
+    if (!process.argv.includes('--no-open')) openBrowser(running.server.openUrl)
     let closing = false
     const close = async () => {
       if (closing) return

@@ -12,10 +12,26 @@ boo-code web
 ```
 
 Boo membuka browser ke server pada `127.0.0.1` dengan token acak per proses. Bila
-port tertentu diperlukan, gunakan `boo-code web --port 3000`. Halaman menyediakan
+port tertentu diperlukan, gunakan `boo-code web --port 3000`; `--no-open` menahan
+browser agar tidak dibuka, misalnya saat dijalankan dari skrip. Halaman menyediakan
 sesi, model, spec, antrean, streaming jawaban, dan persetujuan perubahan/perintah;
 menutup tab tidak menghentikan pekerjaan. Tekan Ctrl-C di terminal untuk menutup
 server.
+
+Tombol ⚙ membuka pengaturan penyedia model: alamat API dan kunci untuk 9Router,
+OpenAI, Anthropic, OpenRouter, Ollama, atau alamat OpenAI-compatible lain. Kunci
+hanya bisa diisi, tidak pernah ditampilkan kembali — halaman hanya diberi tahu
+apakah kuncinya sudah ada. Koneksi diperiksa lebih dulu, jadi kunci yang salah
+ketik tidak tersimpan diam-diam:
+
+```
+  Ollama · model lokal di komputer ini, tanpa kunci
+  [http://localhost:11434/v1] [tanpa kunci] [Simpan]
+  Tidak dapat terhubung ke Ollama: fetch failed
+```
+
+Setelan tersimpan di `~/.boo/.env` dengan izin `600`, dan penyedia yang baru
+ditambahkan langsung dapat dipakai tanpa menjalankan ulang server.
 
 ## Memasang di mesin lain
 

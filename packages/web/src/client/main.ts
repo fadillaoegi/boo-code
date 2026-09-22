@@ -7,7 +7,7 @@
  */
 
 import type { ViewItem } from '@boo/core/presentation/view.ts'
-import type { ImageAttachment, ModelFamilyView, QuestionOption, ServerEvent, SessionView, Snapshot, SpecView } from '../protocol.ts'
+import type { ImageAttachment, ModelFamilyView, ProviderStatusView, QuestionOption, ServerEvent, SessionView, Snapshot, SpecView } from '../protocol.ts'
 import { Api, ApiError, takeToken } from './api.ts'
 import { append, clear, h, renderMarkdown } from './dom.ts'
 import { renderItem, renderQuestion, renderStatus } from './items.ts'
@@ -42,9 +42,10 @@ interface State {
   question: ReturnType<typeof renderQuestion> | null
   sessions: SessionView[]
   specs: SpecView[]
+  providers: ProviderStatusView[]
 }
 
-const state: State = { snapshot: null, items: [], elements: new Map(), question: null, sessions: [], specs: [] }
+const state: State = { snapshot: null, items: [], elements: new Map(), question: null, sessions: [], specs: [], providers: [] }
 
 /* ------------------------------------------------------------------ tema */
 
@@ -203,12 +204,14 @@ function start(api: Api): void {
   const modelButton = h('button', { class: 'model-button', type: 'button', title: 'Ganti model' })
   const instructionsChip = h('span', { class: 'chip', hidden: true })
   const connection = h('span', { class: 'connection', hidden: true }, 'Menyambung ulang…')
+  const providersButton = h('button', { class: 'icon-button', type: 'button', title: 'Penyedia model dan kunci API' }, '⚙')
   const topbar = h('header', { class: 'topbar' },
     h('button', { class: 'icon-button menu', type: 'button', title: 'Menu', onClick: () => document.body.classList.toggle('nav-open') }, '☰'),
     modelButton,
     instructionsChip,
     h('span', { class: 'spacer' }),
     connection,
+    providersButton,
   )
 
   const log = h('div', { class: 'log-inner' })
@@ -533,6 +536,94 @@ function start(api: Api): void {
       manual.append(h('details', { class: 'more-models' }, h('summary', {}, `Model lain (${others.length})`), h('div', { class: 'model-list' }, others.map(familyRow))))
     }
   }
+  /* ---------------------------------------------------------- penyedia model */
+
+  interface ProviderNotice { id: string; text: string }
+
+  const providerDialog = h('dialog', { class: 'model-dialog' })
+  root.append(providerDialog)
+
+  /**
+   * Satu baris penyedia: alamat, kunci, dan tombolnya. Kunci yang sudah tersimpan
+   * tidak pernah dikirim ke halaman, jadi isiannya selalu kosong dan hanya
+   * ditandai bahwa kuncinya sudah ada.
+   */
+  const providerRow = (provider: ProviderStatusView, refresh: (notice?: ProviderNotice) => Promise<void>, notice = ''): HTMLElement => {
+    const url = h('input', { class: 'field', type: 'url', value: provider.baseUrl, placeholder: 'https://…', spellcheck: 'false' })
+    const key = h('input', {
+      class: 'field',
+      type: 'password',
+      autocomplete: 'off',
+      placeholder: provider.hasKey ? 'tersimpan · isi untuk mengganti' : provider.keyRequired ? `kunci dari ${provider.keySource}` : 'tanpa kunci',
+    })
+    // Daftar digambar ulang setelah menyimpan, jadi hasilnya diteruskan ke baris baru.
+    const status = h('span', { class: `provider-status${notice ? ' ok' : ''}` }, notice)
+    const save = h('button', { class: 'button primary small', type: 'button' }, 'Simpan')
+    const remove = h('button', { class: 'button small', type: 'button', hidden: !provider.configured }, 'Hapus')
+
+    const send = async (body: Record<string, unknown>, working: string) => {
+      save.disabled = true
+      remove.disabled = true
+      status.textContent = working
+      status.className = 'provider-status'
+      try {
+        const result = await api.post<{ models: number }>('/api/providers', { id: provider.id, ...body })
+        key.value = ''
+        await refresh({ id: provider.id, text: body.remove ? 'dihapus' : `terhubung · ${result.models} model` })
+      } catch (error) {
+        status.textContent = error instanceof Error ? error.message : 'gagal'
+        status.className = 'provider-status error'
+      } finally {
+        save.disabled = false
+        remove.disabled = false
+      }
+    }
+
+    save.addEventListener('click', () => void send({ baseUrl: url.value, apiKey: key.value }, 'memeriksa koneksi…'))
+    remove.addEventListener('click', () => void send({ remove: true }, 'menghapus…'))
+    key.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') save.click()
+    })
+
+    return h('div', { class: `provider-row${provider.configured ? ' active' : ''}` },
+      h('div', { class: 'provider-head' },
+        h('span', { class: 'model-name' }, provider.label),
+        provider.primary ? h('span', { class: 'tag' }, 'utama') : provider.configured ? h('span', { class: 'tag' }, 'terpasang') : null,
+        h('span', { class: 'muted' }, provider.hint),
+      ),
+      h('div', { class: 'provider-fields' }, url, key, save, remove),
+      status,
+    )
+  }
+
+  const openProviders = async () => {
+    clear(providerDialog)
+    providerDialog.append(h('div', { class: 'dialog-head' }, h('strong', {}, 'Penyedia model'), h('button', { class: 'icon-button', type: 'button', onClick: () => providerDialog.close() }, '✕')))
+    const list = h('div', { class: 'provider-list' }, h('p', { class: 'muted' }, 'Memuat…'))
+    providerDialog.append(h('div', { class: 'dialog-body' },
+      h('p', { class: 'muted' }, 'Kunci disimpan di ~/.boo/.env milikmu dan tidak pernah ditampilkan kembali. Model dari penyedia selain yang utama memakai awalan, misalnya anthropic:claude-sonnet-4-6.'),
+      h('p', { class: 'muted' }, 'Kunci langganan Codex CLI dan Claude Code tidak dipakai; pakai kunci API resmi atau 9Router.'),
+      list,
+    ))
+    providerDialog.showModal()
+    const refresh = async (notice?: ProviderNotice) => {
+      const { providers } = await api.get<{ providers: ProviderStatusView[] }>('/api/providers')
+      state.providers = providers
+      clear(list)
+      for (const provider of providers) list.append(providerRow(provider, refresh, notice?.id === provider.id ? notice.text : ''))
+    }
+    try {
+      await refresh()
+    } catch (error) {
+      clear(list)
+      list.append(h('p', { class: 'error-text' }, error instanceof Error ? error.message : 'Gagal memuat penyedia.'))
+    }
+  }
+  providersButton.addEventListener('click', () => void openProviders())
+  providerDialog.addEventListener('click', (event) => {
+    if (event.target === providerDialog) providerDialog.close()
+  })
+
   modelButton.addEventListener('click', () => void openModels())
   dialog.addEventListener('click', (event) => {
     if (event.target === dialog) dialog.close()
@@ -541,7 +632,7 @@ function start(api: Api): void {
   /* ---------------------------------------------------------- keyboard */
 
   document.addEventListener('keydown', (event) => {
-    if (dialog.open) return
+    if (dialog.open || providerDialog.open) return
     if (event.key === 'Escape' && busy) {
       event.preventDefault()
       void guard(() => api.post('/api/cancel'))
@@ -585,6 +676,9 @@ function start(api: Api): void {
         break
       case 'question':
         setQuestion(event.question)
+        break
+      case 'providers':
+        state.providers = event.providers
         break
       case 'model':
         if (state.snapshot) state.snapshot.model = event.model

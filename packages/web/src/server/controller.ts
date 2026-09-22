@@ -80,8 +80,13 @@ import {
   type UserAnswer,
   type UserQuestion,
   profilesFromConfig,
+  defaultProfile,
+  listAnthropicModels,
+  PROVIDER_DEFINITIONS,
+  providerDefinition,
+  type ProviderProfile,
 } from '@boo/core'
-import type { BooKey } from '@boo/core/config/config.ts'
+import { GLOBAL_CONFIG_PATH, updateEnvFile, type BooKey } from '@boo/core/config/config.ts'
 import { describeRequest, languageOf } from '@boo/core/presentation/approval.ts'
 import { buildTranscript } from '@boo/core/presentation/transcript.ts'
 import type { ViewItem } from '@boo/core/presentation/view.ts'
@@ -96,6 +101,7 @@ import type {
   ServerEvent,
   SessionView,
   Snapshot,
+  ProviderStatusView,
   SpecView,
   StatusView,
 } from '../protocol.ts'
@@ -126,6 +132,8 @@ export interface ControllerOptions {
   createProvider?: (options: ProviderOptions) => NineRouterProvider
   /** Jeda pengulangan panggilan model; dipersingkat di test. */
   retryDelaysMs?: number[]
+  /** Berkas setelan yang ditulis saat penyedia diubah dari halaman web. */
+  configPath?: string
 }
 
 interface Job {
@@ -150,6 +158,8 @@ type Listener = (event: ServerEvent) => void
 
 export class WebController {
   private readonly options: ControllerOptions
+  /** Setelan yang berlaku; berubah saat penyedia diatur dari halaman web. */
+  private readonly settings: Record<string, string | undefined>
   private readonly workspace: string
   private readonly provider: NineRouterProvider
   private modelMode: ModelMode
@@ -171,6 +181,7 @@ export class WebController {
 
   constructor(options: ControllerOptions) {
     this.options = options
+    this.settings = { ...options.config }
     this.workspace = options.workspace
     this.modelMode = options.config.BOO_MODEL && options.config.BOO_MODEL !== 'auto' ? 'manual' : 'auto'
     const model = this.modelMode === 'auto' ? DEFAULT_MODEL : options.config.BOO_MODEL || DEFAULT_MODEL
@@ -492,6 +503,80 @@ export class WebController {
       effort: this.provider.reasoningEffort ?? null,
       label: this.modelMode === 'auto' ? `Auto · ${this.agent.lastAutoSelection ? label : 'menunggu tugas'}` : `Manual · ${label}`,
     }
+  }
+
+  /**
+   * Keadaan penyedia untuk halaman pengaturan. Yang dikirim hanya alamat dan
+   * apakah kuncinya sudah ada — nilai kuncinya sendiri tidak pernah meninggalkan
+   * proses ini, termasuk ke tab yang sedang terbuka.
+   */
+  providerStatus(): ProviderStatusView[] {
+    const configured = profilesFromConfig(this.settings)
+    const primary = defaultProfile(configured)
+    return PROVIDER_DEFINITIONS.map((definition) => {
+      const profile = configured.find((candidate) => candidate.id === definition.id)
+      return {
+        id: definition.id,
+        label: definition.label,
+        hint: definition.hint,
+        keySource: definition.keySource,
+        keyRequired: definition.keyRequired,
+        baseUrl: profile?.baseUrl ?? (this.settings[definition.urlName] ?? '').trim() ?? definition.defaultBaseUrl,
+        configured: Boolean(profile),
+        hasKey: Boolean((this.settings[definition.keyName] ?? '').trim()),
+        primary: Boolean(profile) && primary?.id === definition.id,
+      }
+    })
+  }
+
+  /**
+   * Menyimpan atau menghapus satu penyedia. Koneksinya diperiksa lebih dulu supaya
+   * kunci yang salah ketik tidak tersimpan diam-diam, lalu setelan ditulis ke
+   * ~/.boo/.env dengan izin hanya untuk pemilik.
+   */
+  async saveProvider(input: { id: string; baseUrl?: string; apiKey?: string; remove?: boolean }): Promise<{ models: number }> {
+    this.requireIdle()
+    const definition = providerDefinition(input.id)
+    if (!definition) throw new ControllerError(`Penyedia "${input.id}" tidak dikenal.`, 404)
+
+    if (input.remove) {
+      this.writeSettings({ [definition.urlName]: '', [definition.keyName]: '' })
+      return { models: 0 }
+    }
+
+    const baseUrl = (input.baseUrl ?? '').trim() || (this.settings[definition.urlName] ?? '').trim() || definition.defaultBaseUrl
+    if (!baseUrl) throw new ControllerError('Alamat API wajib diisi untuk penyedia ini.')
+    try {
+      const parsed = new URL(baseUrl)
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('protokol')
+    } catch {
+      throw new ControllerError(`"${baseUrl}" bukan alamat HTTP(S) yang sah.`)
+    }
+
+    const apiKey = (input.apiKey ?? '').trim() || (this.settings[definition.keyName] ?? '').trim()
+    if (!apiKey && definition.keyRequired) throw new ControllerError(`Kunci API wajib diisi; ambil dari ${definition.keySource}.`)
+
+    const profile: ProviderProfile = { id: definition.id, label: definition.label, baseUrl, apiKey, wire: definition.wire }
+    let models: string[]
+    try {
+      models = profile.wire === 'anthropic'
+        ? await listAnthropicModels(profile, 15_000)
+        : await new NineRouterProvider({ baseUrl, apiKey, profiles: [profile], model: '', timeoutMs: 15_000 }).listModels()
+    } catch (error) {
+      throw new ControllerError(`Tidak dapat terhubung ke ${definition.label}: ${error instanceof Error ? error.message : 'error tak dikenal'}`, 502)
+    }
+
+    this.writeSettings({ [definition.urlName]: baseUrl, ...(apiKey ? { [definition.keyName]: apiKey } : {}) })
+    return { models: models.length }
+  }
+
+  /** Menulis setelan, lalu menerapkannya ke penyedia yang sedang berjalan. */
+  private writeSettings(values: Record<string, string>): void {
+    updateEnvFile(this.options.configPath ?? GLOBAL_CONFIG_PATH, values)
+    Object.assign(this.settings, values)
+    this.provider.profiles = profilesFromConfig(this.settings)
+    this.emit({ type: 'providers', providers: this.providerStatus() })
+    this.emit({ type: 'model', model: this.modelView() })
   }
 
   async models(): Promise<ModelFamilyView[]> {

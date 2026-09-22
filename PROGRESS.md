@@ -14,9 +14,10 @@ fungsi, perintah verifikasi).
 
 - **Tanggal:** 2026-09-23
 - **Dikerjakan oleh:** Claude Code (melanjutkan sesi Codex yang terhenti karena limit)
-- **Verifikasi:** `pnpm typecheck`, `pnpm test` (510 lolos), `pnpm -s lint`, dan
+- **Verifikasi:** `pnpm typecheck`, `pnpm test` (511 lolos), `pnpm -s lint`, dan
   `pnpm release` — semuanya bersih. Uji asap ke 9Router sungguhan lewat
-  `boo-code exec` dan `boo-code doctor` juga berhasil.
+  `boo-code exec` dan `boo-code doctor` berhasil, dan halaman web diuji di Chrome
+  headless (dialog penyedia, simpan berhasil, dan kegagalan koneksi).
 - **Git:** semua pekerjaan sudah di-commit; tidak ada yang menggantung.
 
 ## Sudah selesai
@@ -39,16 +40,17 @@ fungsi, perintah verifikasi).
   tetap ke penyedia utama sehingga sesi lama tidak berubah. Adapter Anthropic di
   `provider/anthropic.ts`, error bersama di `provider/errors.ts`. `boo-code setup`
   memasang beberapa penyedia sekaligus, `doctor` melaporkannya, dan `/model`
-  menampilkan semuanya dalam satu daftar.
+  menampilkan semuanya dalam satu daftar. Di web, tombol ⚙ membuka pengaturan
+  penyedia (`GET`/`POST /api/providers`); kunci hanya masuk, tidak pernah dikirim
+  balik ke halaman. `boo-code web --no-open` menahan browser agar tidak dibuka.
 
 ## Sedang dikerjakan
 
 Tidak ada. Yang tersisa dari #72, bila ingin dilanjutkan:
 
-- Mencoba jalur Anthropic dengan kunci API sungguhan; sekarang baru diuji lewat
-  server tiruan di `packages/core/tests/providers.test.ts`.
-- Formulir kunci penyedia di antarmuka web; sekarang penyedia hanya diatur lewat
-  `boo-code setup`.
+- Mencoba jalur Anthropic dengan kunci API sungguhan. Di mesin ini belum ada
+  `ANTHROPIC_API_KEY`, jadi adapter baru diuji lewat server tiruan di
+  `packages/core/tests/providers.test.ts`.
 
 ## Berikutnya (peta jalan Codex, nomor 2–10)
 

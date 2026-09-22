@@ -152,6 +152,11 @@ export class NineRouterProvider {
     return [{ id: 'ninerouter', label: '9Router', baseUrl: this.options.baseUrl, apiKey: this.options.apiKey, wire: 'openai' }]
   }
 
+  /** Diganti saat pengguna menambah atau menghapus penyedia di tengah sesi. */
+  set profiles(profiles: ProviderProfile[]) {
+    this.options.profiles = profiles
+  }
+
   /** Memecah id model menjadi penyedia dan nama model di sisi penyedia itu. */
   private resolve(modelId: string): { profile: ProviderProfile; model: string } {
     const { providerId, model } = splitModelId(modelId)

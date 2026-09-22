@@ -61,6 +61,20 @@ export interface QuestionView {
   options: QuestionOption[]
 }
 
+/** Keadaan satu penyedia model; kunci API tidak pernah ikut dikirim ke halaman. */
+export interface ProviderStatusView {
+  id: string
+  label: string
+  hint: string
+  keySource: string
+  keyRequired: boolean
+  baseUrl: string
+  configured: boolean
+  hasKey: boolean
+  /** Penyedia yang melayani model tanpa awalan. */
+  primary: boolean
+}
+
 export interface SessionView {
   id: string
   title: string
@@ -108,6 +122,7 @@ export type ServerEvent =
   | { type: 'queue'; queue: string[] }
   | { type: 'question'; question: QuestionView | null }
   | { type: 'model'; model: ModelView }
+  | { type: 'providers'; providers: ProviderStatusView[] }
   /** Sesi baru mendapat id setelah pesan pertamanya tersimpan. */
   | { type: 'session'; sessionId: string }
 
