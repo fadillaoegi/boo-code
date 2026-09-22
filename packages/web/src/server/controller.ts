@@ -85,6 +85,10 @@ import {
   PROVIDER_DEFINITIONS,
   providerDefinition,
   type ProviderProfile,
+  DashboardError,
+  gatherQuota,
+  loginToDashboard,
+  providerLabel,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, updateEnvFile, type BooKey } from '@boo/core/config/config.ts'
 import { describeRequest, languageOf } from '@boo/core/presentation/approval.ts'
@@ -102,6 +106,7 @@ import type {
   SessionView,
   Snapshot,
   ProviderStatusView,
+  QuotaReportView,
   SpecView,
   StatusView,
 } from '../protocol.ts'
@@ -524,6 +529,7 @@ export class WebController {
         baseUrl: profile?.baseUrl ?? (this.settings[definition.urlName] ?? '').trim() ?? definition.defaultBaseUrl,
         configured: Boolean(profile),
         hasKey: Boolean((this.settings[definition.keyName] ?? '').trim()),
+        ...(definition.id === 'ninerouter' ? { hasDashboardPassword: Boolean((this.settings.NINEROUTER_DASHBOARD_PASSWORD ?? '').trim()) } : {}),
         primary: Boolean(profile) && primary?.id === definition.id,
       }
     })
@@ -534,7 +540,7 @@ export class WebController {
    * kunci yang salah ketik tidak tersimpan diam-diam, lalu setelan ditulis ke
    * ~/.boo/.env dengan izin hanya untuk pemilik.
    */
-  async saveProvider(input: { id: string; baseUrl?: string; apiKey?: string; remove?: boolean }): Promise<{ models: number }> {
+  async saveProvider(input: { id: string; baseUrl?: string; apiKey?: string; dashboardPassword?: string; remove?: boolean }): Promise<{ models: number }> {
     this.requireIdle()
     const definition = providerDefinition(input.id)
     if (!definition) throw new ControllerError(`Penyedia "${input.id}" tidak dikenal.`, 404)
@@ -566,7 +572,22 @@ export class WebController {
       throw new ControllerError(`Tidak dapat terhubung ke ${definition.label}: ${error instanceof Error ? error.message : 'error tak dikenal'}`, 502)
     }
 
-    this.writeSettings({ [definition.urlName]: baseUrl, ...(apiKey ? { [definition.keyName]: apiKey } : {}) })
+    const dashboard = (input.dashboardPassword ?? '').trim()
+    if (dashboard && definition.id === 'ninerouter') {
+      // Diperiksa sekali saja: dashboard mengunci akun setelah beberapa kegagalan.
+      try {
+        await loginToDashboard(baseUrl, dashboard)
+      } catch (error) {
+        const attempts = error instanceof DashboardError && error.attemptsLeft !== undefined ? ` (sisa ${error.attemptsLeft} percobaan sebelum terkunci)` : ''
+        throw new ControllerError(`${error instanceof Error ? error.message : 'Password dashboard ditolak'}${attempts}`, 502)
+      }
+    }
+
+    this.writeSettings({
+      [definition.urlName]: baseUrl,
+      ...(apiKey ? { [definition.keyName]: apiKey } : {}),
+      ...(dashboard && definition.id === 'ninerouter' ? { NINEROUTER_DASHBOARD_PASSWORD: dashboard } : {}),
+    })
     return { models: models.length }
   }
 
@@ -577,6 +598,23 @@ export class WebController {
     this.provider.profiles = profilesFromConfig(this.settings)
     this.emit({ type: 'providers', providers: this.providerStatus() })
     this.emit({ type: 'model', model: this.modelView() })
+  }
+
+  /** Sisa limit dan pemakaian, digabung dari semua sumber yang tersedia. */
+  async quota(): Promise<QuotaReportView> {
+    const report = await gatherQuota({ profiles: profilesFromConfig(this.settings), config: this.settings })
+    return {
+      entries: report.entries.map((entry) => ({ ...entry, providerLabel: providerLabel(entry.providerId) })),
+      usage: report.usage.map((usage) => ({
+        model: usage.model,
+        providerLabel: providerLabel(usage.providerId),
+        requests: usage.requests,
+        failures: usage.failures,
+        tokens: usage.inputTokens + usage.outputTokens,
+        ...(usage.cooldownUntil ? { cooldownUntil: usage.cooldownUntil } : {}),
+      })),
+      notes: report.notes,
+    }
   }
 
   async models(): Promise<ModelFamilyView[]> {

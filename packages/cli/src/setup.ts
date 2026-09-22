@@ -9,7 +9,9 @@
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
 import {
+  DashboardError,
   listAnthropicModels,
+  loginToDashboard,
   NineRouterProvider,
   PROVIDER_DEFINITIONS,
   profilesFromConfig,
@@ -143,9 +145,36 @@ async function addProvider(definition: ProviderDefinition, config: Record<string
     if (keep?.trim().toLowerCase() !== 'y') return null
   }
 
-  return {
-    settings: { [definition.urlName]: url, ...(key ? { [definition.keyName]: key } : {}) },
-    models: models.map((id) => qualifyModelId(definition.id, id)),
+  const settings: Settings = { [definition.urlName]: url, ...(key ? { [definition.keyName]: key } : {}) }
+  Object.assign(settings, await askDashboardPassword(definition, url, config))
+  return { settings, models: models.map((id) => qualifyModelId(definition.id, id)) }
+}
+
+/**
+ * Kunci API 9Router tidak membuka kuota langganan; itu ada di balik login
+ * dashboard. Password ditanyakan sekali, diperiksa sekali, dan hanya disimpan bila
+ * benar — dashboard mengunci akun setelah beberapa percobaan gagal, jadi password
+ * yang salah tidak boleh tersimpan lalu dicoba berulang kali di belakang layar.
+ */
+async function askDashboardPassword(definition: ProviderDefinition, url: string, config: Record<string, string | undefined>): Promise<Settings> {
+  if (definition.id !== 'ninerouter') return {}
+  const saved = Boolean((config.NINEROUTER_DASHBOARD_PASSWORD ?? '').trim())
+  const hint = saved ? ' [enter: pakai yang tersimpan]' : ' [opsional, enter untuk lewati]'
+  console.log(`  ${theme.muted('Sisa kuota langganan hanya terbaca lewat dashboard 9Router.')}`)
+  const answer = await askSecret(`  Password dashboard${theme.muted(hint)}: `)
+  const password = (answer ?? '').trim()
+  if (!password) return {}
+
+  stdout.write(`  ${theme.muted('Memeriksa password…')}`)
+  try {
+    await loginToDashboard(url, password)
+    stdout.write(`\r  ${theme.accent('✓')} Password dashboard diterima; /limit dapat membaca sisa kuota.\n`)
+    return { NINEROUTER_DASHBOARD_PASSWORD: password }
+  } catch (error) {
+    const attempts = error instanceof DashboardError && error.attemptsLeft !== undefined ? ` · sisa ${error.attemptsLeft} percobaan sebelum terkunci` : ''
+    stdout.write(`\r  ${theme.danger('✗')} ${error instanceof Error ? error.message : 'gagal'}${attempts}\n`)
+    console.log(`  ${theme.muted('Password tidak disimpan. Setelan penyedia lainnya tetap tersimpan.')}`)
+    return {}
   }
 }
 

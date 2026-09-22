@@ -111,6 +111,45 @@ terpisah, pemanggilan tool menjadi blok `tool_use`/`tool_result`, dan tingkat
 penalaran menjadi anggaran berpikir (`low` 2.048 token sampai `xhigh` 32.768).
 Sisanya — agent loop, izin, transkrip, sesi — tidak berubah sama sekali.
 
+### Sisa limit: /limit
+
+`/limit` di dalam sesi — atau tombol ⚙ di web — menampilkan sisa jatah tiap
+penyedia beserta pemakaianmu di mesin ini:
+
+```
+› /limit
+
+  Sisa limit
+  ● 9Router · Antigravity utama
+    750 dari 1000  pulih 14.00  (dashboard)
+  ○ 9Router · ag/gemini-3.7-flash-low
+    tidak dilaporkan  (dari pemakaian)
+
+  Pemakaian di mesin ini · perkiraan token, sejak Boo dijalankan
+  · ag/gemini-3.7-flash-low  2 permintaan · ~3.4K token
+```
+
+Setiap angka menyebut asalnya, karena tidak ada penyedia yang melaporkan semuanya:
+
+| Sumber | Yang diketahui | Penyedia |
+|---|---|---|
+| `dashboard` | sisa kuota langganan per akun | 9Router, bila password dashboard diisi |
+| `saldo kunci` | sisa kredit kunci itu sendiri | OpenRouter |
+| `header respons` | sisa jatah per menit (permintaan atau token) | OpenAI, Anthropic |
+| `dari pemakaian` | model sedang cooldown sampai kapan, dan berapa yang sudah dipakai | semua penyedia |
+
+Yang **tidak** bisa diketahui disebutkan apa adanya, bukan ditebak: kunci API
+9Router hanya membuka `/v1/*`, sedangkan kuota langganan ada di balik login
+dashboard. Isi password dashboard lewat `boo-code setup` (atau kolomnya di tombol
+⚙) untuk membukanya. Password diperiksa **sekali** saat diisi dan hanya disimpan
+bila benar — dashboard mengunci akun setelah beberapa percobaan gagal, jadi Boo
+tidak pernah mencoba ulang sendiri. Dari jawaban dashboard, Boo hanya membaca nama
+dan angka kuota; token akun langgananmu tidak pernah dibaca atau disimpan.
+
+Hitungan token adalah perkiraan dari panjang teks, karena 9Router tidak melaporkan
+pemakaian token di responsnya. Semua catatan ini ada di memori proses dan hilang
+saat Boo ditutup.
+
 **Yang tidak didukung dan alasannya:** kredensial langganan Codex CLI dan Claude
 Code. Keduanya berupa login akun yang diterbitkan untuk aplikasi itu sendiri, jadi
 Boo tidak membacanya. Untuk memakai model yang sama, pakai kunci API resmi dari
@@ -893,6 +932,7 @@ tekan `Esc` lalu `Enter` dengan cepat sebagai alternatif. [Panduan Apple](https:
 | `/attach <path>` | lampirkan gambar ke prompt berikutnya |
 | `/attachments [clear]` | lihat atau lepas gambar yang menunggu |
 | `/compact` | ringkas percakapan sejauh ini agar konteks lega |
+| `/limit` | sisa limit tiap penyedia dan pemakaian model di mesin ini |
 | `/context` | lihat pemakaian, sumber, dan ruang konteks model |
 | `/status` | lihat tujuan, progres todo, tool, file terdampak, dan verifikasi task terakhir |
 | `/stats` | lihat metrik lokal 100 permintaan terakhir untuk workspace ini |

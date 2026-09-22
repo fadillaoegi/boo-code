@@ -92,6 +92,9 @@ import {
   type UserQuestion,
   profilesFromConfig,
   type ProviderProfile,
+  gatherQuota,
+  providerLabel,
+  type QuotaEntry,
 } from '@boo/core'
 import { GLOBAL_CONFIG_PATH, loadConfig } from '@boo/core/config/config.ts'
 import { openBrowser, startWeb } from '@boo/web'
@@ -204,6 +207,7 @@ const HELP = `  /model          pilih model dengan tombol panah
   /fork           cabangkan percakapan ini ke sesi eksperimen baru
   /rewind [nomor] buat cabang baru dari sebelum prompt lama
   /undo           batalkan perubahan berkas dari permintaan terakhir
+  /limit          sisa limit tiap penyedia dan pemakaian model di mesin ini
   /restore [id]   pulihkan file ke sebelum checkpoint lama
   /commands       tampilkan custom command proyek dan global
   /hooks          tampilkan lifecycle hooks yang aktif
@@ -1400,6 +1404,63 @@ async function main() {
    * tersimpan pesan demi pesan, jadi tidak ada yang hilang saat ditinggalkan.
    */
   /** Mengembalikan berkas yang diubah Boo pada permintaan terakhir yang mengubah berkas. */
+  /** Jam pulihnya jatah, atau "—" bila tidak diketahui. */
+  function whenResets(resetAt: number | undefined): string {
+    if (!resetAt) return '—'
+    const minutes = Math.round((resetAt - Date.now()) / 60_000)
+    if (minutes <= 0) return 'sebentar lagi'
+    if (minutes < 60) return `${minutes} menit lagi`
+    const time = new Date(resetAt)
+    return `${String(time.getHours()).padStart(2, '0')}.${String(time.getMinutes()).padStart(2, '0')}`
+  }
+
+  function amount(entry: QuotaEntry): string {
+    if (entry.remaining === undefined) return entry.state === 'cooldown' ? 'sedang cooldown' : 'tidak dilaporkan'
+    const unit = entry.unit === 'usd' ? '$' : ''
+    const value = entry.unit === 'usd' ? entry.remaining.toFixed(2) : String(Math.round(entry.remaining))
+    return entry.limit ? `${unit}${value} dari ${entry.unit === 'usd' ? `$${entry.limit.toFixed(2)}` : Math.round(entry.limit)}` : `${unit}${value}`
+  }
+
+  const SOURCE_LABEL: Record<string, string> = {
+    headers: 'header respons',
+    credits: 'saldo kunci',
+    dashboard: 'dashboard',
+    observed: 'dari pemakaian',
+  }
+
+  /** Sisa limit tiap penyedia, beserta apa yang memang tidak dapat diketahui. */
+  async function showLimits(): Promise<void> {
+    console.log(`\n  ${theme.bold('Sisa limit')} ${theme.muted('· memeriksa penyedia…')}`)
+    let report
+    try {
+      report = await gatherQuota({ profiles: profilesFromConfig(config), config })
+    } catch (error) {
+      console.log(`  ${theme.danger('error')} ${error instanceof Error ? error.message : 'gagal membaca limit'}\n`)
+      return
+    }
+
+    if (!report.entries.length) console.log(`  ${theme.muted('Belum ada angka limit yang dapat dibaca.')}`)
+    for (const entry of report.entries) {
+      const mark = entry.state === 'ok' ? theme.accent('●') : entry.state === 'unknown' ? theme.muted('○') : theme.danger('●')
+      const reset = entry.resetAt ? `  ${theme.muted(`pulih ${whenResets(entry.resetAt)}`)}` : ''
+      console.log(`  ${mark} ${theme.bold(`${providerLabel(entry.providerId)} · ${entry.label}`)}`)
+      console.log(`    ${amount(entry)}${reset}  ${theme.muted(`(${SOURCE_LABEL[entry.source] ?? entry.source})`)}`)
+      if (entry.detail) console.log(`    ${theme.muted(entry.detail.slice(0, 120))}`)
+    }
+
+    if (report.usage.length) {
+      console.log(`\n  ${theme.bold('Pemakaian di mesin ini')} ${theme.muted('· perkiraan token, sejak Boo dijalankan')}`)
+      for (const usage of report.usage) {
+        const failed = usage.failures ? theme.muted(` · ${usage.failures} gagal`) : ''
+        const tokens = usage.inputTokens + usage.outputTokens
+        const size = tokens < 1_000 ? `${tokens} token` : `${(tokens / 1_000).toFixed(1)}K token`
+        console.log(`  ${theme.muted('·')} ${usage.model}  ${theme.muted(`${usage.requests} permintaan · ~${size}`)}${failed}`)
+      }
+    }
+    for (const note of report.notes) console.log(`\n  ${theme.muted(note)}`)
+    console.log()
+  }
+
   async function undoChanges(): Promise<void> {
     const plan = await agent.checkpoints.plan()
     if (!plan) {
@@ -1957,6 +2018,10 @@ async function main() {
     }
     if (input === '/undo') {
       await undoChanges()
+      continue
+    }
+    if (input === '/limit' || input === '/usage') {
+      await showLimits()
       continue
     }
     if (input === '/restore' || input.startsWith('/restore ')) {

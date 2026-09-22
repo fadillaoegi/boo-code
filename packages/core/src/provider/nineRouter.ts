@@ -18,6 +18,7 @@ import { redactOutboundMessages } from '../security/redaction.ts'
 import { listAnthropicModels, streamAnthropic } from './anthropic.ts'
 import { connectionError, errorMessage, httpError, ProviderError } from './errors.ts'
 import { defaultProfile, splitModelId, qualifyModelId, type ProviderProfile } from './profiles.ts'
+import { quotaTracker } from './quota.ts'
 
 export { connectionError, httpError, ProviderError } from './errors.ts'
 
@@ -271,7 +272,9 @@ export class NineRouterProvider {
     } catch (error) {
       clearTimeout(idleTimer)
       if (signal?.aborted) throw error
-      throw connectionError(error, idleTimedOut)
+      const failure = connectionError(error, idleTimedOut)
+      quotaTracker.recordFailure(profile.id, model, failure.message)
+      throw failure
     }
 
     if (!response.ok || !response.body) {
@@ -283,8 +286,12 @@ export class NineRouterProvider {
       } finally {
         clearTimeout(idleTimer)
       }
-      throw httpError(raw, response.status)
+      const failure = httpError(raw, response.status)
+      quotaTracker.recordFailure(profile.id, model, failure.message, failure.retryAfterMs)
+      throw failure
     }
+    // Sisa jatah per menit dilaporkan sebagian penyedia lewat header respons.
+    quotaTracker.recordRequest(profile.id, model, response.headers)
 
     const accumulator = new ToolCallAccumulator()
     let content = ''
@@ -356,6 +363,15 @@ export class NineRouterProvider {
       clearTimeout(idleTimer)
       reader.releaseLock()
     }
+
+    // Penyedia tidak selalu melaporkan pemakaian token, jadi Boo memperkirakannya
+    // dari teks yang benar-benar dikirim dan diterima.
+    quotaTracker.recordTokens(
+      profile.id,
+      model,
+      outboundMessages.map((message) => typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '')).join('\n'),
+      content + reasoning,
+    )
 
     const toolCalls = accumulator.toToolCalls()
     if (toolCalls.length && finishReason === 'stop') finishReason = 'tool_calls'

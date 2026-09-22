@@ -17,6 +17,7 @@
 import type { Message, ToolCall, ToolSchema } from '../domain/message.ts'
 import { connectionError, httpError, ProviderError } from './errors.ts'
 import type { ProviderProfile } from './profiles.ts'
+import { quotaTracker } from './quota.ts'
 
 /** Versi API yang kontraknya dipakai di sini. */
 export const ANTHROPIC_VERSION = '2023-06-01'
@@ -224,7 +225,9 @@ export async function* streamAnthropic(options: AnthropicStreamOptions): AsyncGe
   } catch (error) {
     clearTimeout(idleTimer)
     if (signal?.aborted) throw error
-    throw connectionError(error, idleTimedOut)
+    const failure = connectionError(error, idleTimedOut)
+    quotaTracker.recordFailure(profile.id, model, failure.message)
+    throw failure
   }
 
   if (!response.ok || !response.body) {
@@ -236,8 +239,11 @@ export async function* streamAnthropic(options: AnthropicStreamOptions): AsyncGe
     } finally {
       clearTimeout(idleTimer)
     }
-    throw httpError(raw, response.status)
+    const failure = httpError(raw, response.status)
+    quotaTracker.recordFailure(profile.id, model, failure.message, failure.retryAfterMs)
+    throw failure
   }
+  quotaTracker.recordRequest(profile.id, model, response.headers)
 
   const toolCalls = new Map<number, { id: string; name: string; args: string }>()
   let content = ''
@@ -316,6 +322,13 @@ export async function* streamAnthropic(options: AnthropicStreamOptions): AsyncGe
     clearTimeout(idleTimer)
     reader.releaseLock()
   }
+
+  quotaTracker.recordTokens(
+    profile.id,
+    model,
+    [system, ...messages.map((message) => JSON.stringify(message.content))].join('\n'),
+    content + reasoning,
+  )
 
   const calls: ToolCall[] = [...toolCalls.entries()]
     .sort(([a], [b]) => a - b)

@@ -71,8 +71,40 @@ export interface ProviderStatusView {
   baseUrl: string
   configured: boolean
   hasKey: boolean
+  /** Khusus 9Router: kuota langganan terbaca bila password dashboard tersimpan. */
+  hasDashboardPassword?: boolean
   /** Penyedia yang melayani model tanpa awalan. */
   primary: boolean
+}
+
+/** Sisa limit satu penyedia atau model, sebagaimana ditampilkan halaman. */
+export interface QuotaEntryView {
+  providerId: string
+  providerLabel: string
+  label: string
+  state: 'ok' | 'cooldown' | 'exhausted' | 'unknown'
+  source: 'headers' | 'credits' | 'dashboard' | 'observed'
+  remaining?: number
+  limit?: number
+  unit?: 'requests' | 'tokens' | 'credits' | 'usd'
+  resetAt?: number
+  detail?: string
+}
+
+export interface UsageEntryView {
+  model: string
+  providerLabel: string
+  requests: number
+  failures: number
+  /** Perkiraan total token masuk dan keluar. */
+  tokens: number
+  cooldownUntil?: number
+}
+
+export interface QuotaReportView {
+  entries: QuotaEntryView[]
+  usage: UsageEntryView[]
+  notes: string[]
 }
 
 export interface SessionView {

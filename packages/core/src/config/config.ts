@@ -21,6 +21,8 @@ import { dirname, join } from 'node:path'
 const BOO_KEYS = [
   'NINEROUTER_URL',
   'NINEROUTER_KEY',
+  /** Password dashboard 9Router; hanya dipakai membaca sisa kuota langganan. */
+  'NINEROUTER_DASHBOARD_PASSWORD',
   // Penyedia model selain 9Router; definisinya ada di provider/profiles.ts.
   'OPENAI_API_KEY',
   'OPENAI_BASE_URL',

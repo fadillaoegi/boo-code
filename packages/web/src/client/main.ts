@@ -7,7 +7,7 @@
  */
 
 import type { ViewItem } from '@boo/core/presentation/view.ts'
-import type { ImageAttachment, ModelFamilyView, ProviderStatusView, QuestionOption, ServerEvent, SessionView, Snapshot, SpecView } from '../protocol.ts'
+import type { ImageAttachment, ModelFamilyView, ProviderStatusView, QuotaReportView, QuestionOption, ServerEvent, SessionView, Snapshot, SpecView } from '../protocol.ts'
 import { Api, ApiError, takeToken } from './api.ts'
 import { append, clear, h, renderMarkdown } from './dom.ts'
 import { renderItem, renderQuestion, renderStatus } from './items.ts'
@@ -558,6 +558,15 @@ function start(api: Api): void {
     })
     // Daftar digambar ulang setelah menyimpan, jadi hasilnya diteruskan ke baris baru.
     const status = h('span', { class: `provider-status${notice ? ' ok' : ''}` }, notice)
+    // Kuota langganan 9Router hanya terbaca lewat login dashboard.
+    const dashboard = provider.id === 'ninerouter'
+      ? h('input', {
+          class: 'field',
+          type: 'password',
+          autocomplete: 'off',
+          placeholder: provider.hasDashboardPassword ? 'password dashboard tersimpan' : 'password dashboard (opsional, untuk sisa kuota)',
+        })
+      : null
     const save = h('button', { class: 'button primary small', type: 'button' }, 'Simpan')
     const remove = h('button', { class: 'button small', type: 'button', hidden: !provider.configured }, 'Hapus')
 
@@ -579,7 +588,7 @@ function start(api: Api): void {
       }
     }
 
-    save.addEventListener('click', () => void send({ baseUrl: url.value, apiKey: key.value }, 'memeriksa koneksi…'))
+    save.addEventListener('click', () => void send({ baseUrl: url.value, apiKey: key.value, ...(dashboard?.value ? { dashboardPassword: dashboard.value } : {}) }, 'memeriksa koneksi…'))
     remove.addEventListener('click', () => void send({ remove: true }, 'menghapus…'))
     key.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') save.click()
@@ -592,6 +601,7 @@ function start(api: Api): void {
         h('span', { class: 'muted' }, provider.hint),
       ),
       h('div', { class: 'provider-fields' }, url, key, save, remove),
+      dashboard ? h('div', { class: 'provider-fields' }, dashboard) : null,
       status,
     )
   }
@@ -599,13 +609,16 @@ function start(api: Api): void {
   const openProviders = async () => {
     clear(providerDialog)
     providerDialog.append(h('div', { class: 'dialog-head' }, h('strong', {}, 'Penyedia model'), h('button', { class: 'icon-button', type: 'button', onClick: () => providerDialog.close() }, '✕')))
+    const quota = h('div', { class: 'quota-panel' }, h('p', { class: 'muted' }, 'Memeriksa sisa limit…'))
     const list = h('div', { class: 'provider-list' }, h('p', { class: 'muted' }, 'Memuat…'))
     providerDialog.append(h('div', { class: 'dialog-body' },
       h('p', { class: 'muted' }, 'Kunci disimpan di ~/.boo/.env milikmu dan tidak pernah ditampilkan kembali. Model dari penyedia selain yang utama memakai awalan, misalnya anthropic:claude-sonnet-4-6.'),
       h('p', { class: 'muted' }, 'Kunci langganan Codex CLI dan Claude Code tidak dipakai; pakai kunci API resmi atau 9Router.'),
+      quota,
       list,
     ))
     providerDialog.showModal()
+    void loadQuota(quota)
     const refresh = async (notice?: ProviderNotice) => {
       const { providers } = await api.get<{ providers: ProviderStatusView[] }>('/api/providers')
       state.providers = providers
@@ -619,6 +632,45 @@ function start(api: Api): void {
       list.append(h('p', { class: 'error-text' }, error instanceof Error ? error.message : 'Gagal memuat penyedia.'))
     }
   }
+  /** Sisa limit per penyedia, beserta apa yang memang tidak dilaporkan. */
+  const loadQuota = async (target: HTMLElement) => {
+    let report: QuotaReportView
+    try {
+      report = await api.get<QuotaReportView>('/api/quota')
+    } catch (error) {
+      clear(target)
+      target.append(h('p', { class: 'error-text' }, error instanceof Error ? error.message : 'Gagal membaca limit.'))
+      return
+    }
+    clear(target)
+    target.append(h('div', { class: 'quota-title' }, 'Sisa limit'))
+    if (!report.entries.length) target.append(h('p', { class: 'muted' }, 'Belum ada angka limit yang dapat dibaca.'))
+    for (const entry of report.entries) {
+      const amount = entry.remaining === undefined
+        ? entry.state === 'cooldown' ? 'sedang cooldown' : 'tidak dilaporkan'
+        : entry.unit === 'usd'
+          ? `$${entry.remaining.toFixed(2)}${entry.limit ? ` dari $${entry.limit.toFixed(2)}` : ''}`
+          : `${Math.round(entry.remaining)}${entry.limit ? ` dari ${Math.round(entry.limit)}` : ''} ${entry.unit ?? ''}`.trim()
+      target.append(h('div', { class: `quota-row ${entry.state}` },
+        h('span', { class: 'quota-name' }, `${entry.providerLabel} · ${entry.label}`),
+        h('span', { class: 'quota-amount' }, amount),
+        h('span', { class: 'quota-source' }, entry.resetAt ? `pulih ${new Date(entry.resetAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}` : entry.source),
+      ))
+    }
+    if (report.usage.length) {
+      target.append(h('div', { class: 'quota-title' }, 'Pemakaian di mesin ini'))
+      for (const usage of report.usage) {
+        const size = usage.tokens < 1_000 ? `${usage.tokens} token` : `${(usage.tokens / 1_000).toFixed(1)}K token`
+        target.append(h('div', { class: 'quota-row' },
+          h('span', { class: 'quota-name' }, usage.model),
+          h('span', { class: 'quota-amount' }, `${usage.requests} permintaan`),
+          h('span', { class: 'quota-source' }, `~${size}`),
+        ))
+      }
+    }
+    for (const note of report.notes) target.append(h('p', { class: 'muted' }, note))
+  }
+
   providersButton.addEventListener('click', () => void openProviders())
   providerDialog.addEventListener('click', (event) => {
     if (event.target === providerDialog) providerDialog.close()

@@ -284,6 +284,9 @@ export async function startWebServer({ controller, assets, port = 0, token = ran
         json(response, 200, { ok: true })
         return
       }
+      case 'GET /api/quota':
+        json(response, 200, await controller.quota())
+        return
       case 'GET /api/providers':
         json(response, 200, { providers: controller.providerStatus() })
         return
@@ -294,6 +297,7 @@ export async function startWebServer({ controller, assets, port = 0, token = ran
           id: text(body.id),
           baseUrl: text(body.baseUrl),
           apiKey: text(body.apiKey),
+          dashboardPassword: text(body.dashboardPassword),
           remove: body.remove === true,
         })
         json(response, 200, { ok: true, models: saved.models, providers: controller.providerStatus() })

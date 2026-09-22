@@ -14,7 +14,7 @@ fungsi, perintah verifikasi).
 
 - **Tanggal:** 2026-09-23
 - **Dikerjakan oleh:** Claude Code (melanjutkan sesi Codex yang terhenti karena limit)
-- **Verifikasi:** `pnpm typecheck`, `pnpm test` (511 lolos), `pnpm -s lint`, dan
+- **Verifikasi:** `pnpm typecheck`, `pnpm test` (518 lolos), `pnpm -s lint`, dan
   `pnpm release` — semuanya bersih. Uji asap ke 9Router sungguhan lewat
   `boo-code exec` dan `boo-code doctor` berhasil, dan halaman web diuji di Chrome
   headless (dialog penyedia, simpan berhasil, dan kegagalan koneksi).
@@ -44,6 +44,15 @@ fungsi, perintah verifikasi).
   penyedia (`GET`/`POST /api/providers`); kunci hanya masuk, tidak pernah dikirim
   balik ke halaman. `boo-code web --no-open` menahan browser agar tidak dibuka.
 
+- **#73 Sisa limit model** — `/limit` di CLI dan panel di tombol ⚙ web. Sumbernya
+  digabung di `packages/core/src/provider/quotaReport.ts`: kuota dashboard 9Router
+  (`nineRouterDashboard.ts`, login `POST /api/auth/login` lalu cookie sesi), saldo
+  kunci OpenRouter, header rate-limit OpenAI/Anthropic, serta cooldown dan
+  pemakaian yang diamati sendiri (`quota.ts`). Password dashboard diverifikasi
+  sekali lalu disimpan sebagai `NINEROUTER_DASHBOARD_PASSWORD`; tidak pernah dicoba
+  ulang otomatis karena dashboard mengunci akun setelah beberapa kegagalan. Dari
+  jawaban dashboard hanya nama dan angka yang dibaca — token akun diabaikan.
+
 ## Sedang dikerjakan
 
 Tidak ada. Yang tersisa dari #72, bila ingin dilanjutkan:
@@ -51,6 +60,11 @@ Tidak ada. Yang tersisa dari #72, bila ingin dilanjutkan:
 - Mencoba jalur Anthropic dengan kunci API sungguhan. Di mesin ini belum ada
   `ANTHROPIC_API_KEY`, jadi adapter baru diuji lewat server tiruan di
   `packages/core/tests/providers.test.ts`.
+- Menguji kuota dashboard 9Router dengan password sungguhan. Password belum
+  pernah dimasukkan (agen tidak boleh menebaknya: dashboard mengunci setelah
+  beberapa percobaan), jadi parser `extractQuotaEntries` baru diuji dengan bentuk
+  tiruan. Begitu pengguna mengisinya lewat `boo-code setup`, jalankan `/limit`
+  untuk memastikan nama akun dan angkanya terbaca benar.
 
 ## Berikutnya (peta jalan Codex, nomor 2–10)
 

@@ -119,4 +119,13 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2
 .provider-status.ok { color: var(--boo-accent); }
 .provider-status.error { color: var(--boo-danger); }
 
+/* Panel sisa limit di dialog penyedia. */
+.quota-panel { border-bottom: 1px solid var(--boo-border); display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; padding-bottom: 12px; }
+.quota-title { font-size: 11px; font-weight: 700; letter-spacing: .08em; margin-top: 6px; text-transform: uppercase; opacity: .7; }
+.quota-row { align-items: baseline; display: flex; font-size: 13px; gap: 8px; }
+.quota-row .quota-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quota-row .quota-amount { font-variant-numeric: tabular-nums; }
+.quota-row .quota-source { color: var(--boo-muted-foreground); font-size: 11px; min-width: 96px; text-align: right; }
+.quota-row.cooldown .quota-amount, .quota-row.exhausted .quota-amount { color: var(--boo-danger); }
+
 @media (max-width: 760px) { .sidebar { box-shadow: 4px 0 16px #0003; height: 100vh; left: 0; position: fixed; top: 0; transform: translateX(-105%); transition: transform .18s ease; z-index: 2; }.nav-open .sidebar { transform: translateX(0); }.scrim { background: #0006; bottom: 0; left: 0; position: fixed; right: 0; top: 0; z-index: 1; }.nav-open .scrim { display: block; }.menu { display: block; }.topbar { padding: 9px 13px; }.chip { display: none; }.log-inner { padding: 20px 14px 170px; }.dock { padding: 10px 12px 13px; }.question { border-radius: 8px; }.model-row.group { align-items: flex-start; flex-direction: column; }.bubble { max-width: 94%; } }
