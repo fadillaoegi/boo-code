@@ -21,9 +21,11 @@ export function renderItem(item: ViewItem): HTMLElement {
     case 'user':
       return h('div', { class: 'item user', 'data-id': item.id },
         item.afterUndo ? h('div', { class: 'undo-note' }, '↺ perubahan berkas sebelumnya dibatalkan dengan /undo') : null,
-        h('div', { class: `bubble${item.spec ? ' spec' : ''}` },
+        h('div', { class: `bubble${item.spec ? ' spec' : ''}${item.steering ? ' steering' : ''}` },
+          item.steering ? h('span', { class: 'tag' }, 'Arahan') : null,
           item.spec ? h('span', { class: 'tag' }, 'Spec') : null,
           item.spec ?? item.text,
+          item.attachments?.length ? h('div', { class: 'message-attachments' }, item.attachments.map((name) => h('span', {}, `▧ ${name}`))) : null,
         ),
       )
 

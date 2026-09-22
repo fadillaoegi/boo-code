@@ -1,0 +1,5 @@
+{
+  "name": "relay",
+  "httpPort": 4312,
+  "healthPath": "/ready"
+}

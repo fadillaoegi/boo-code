@@ -13,8 +13,6 @@ import { GLOBAL_CONFIG_PATH, updateEnvFile } from '@boo/core/config/config.ts'
 import { theme } from './theme.ts'
 
 export const DEFAULT_BASE_URL = 'http://localhost:20128'
-/** Model bawaan yang dicoba lebih dulu bila tersedia di 9Router. */
-const PREFERRED_MODELS = ['ag/gemini-3.1-pro', 'ag/claude-sonnet-4-6', 'cx/gpt-5.6-terra', 'ag/gemini-3.7-flash-high']
 
 const CTRL_C = String.fromCharCode(3)
 const BACKSPACE = String.fromCharCode(127)
@@ -110,14 +108,13 @@ export async function runSetup(defaults: SetupDefaults): Promise<boolean> {
     if (keep?.trim().toLowerCase() !== 'y') return false
   }
 
-  const modelDefault = (defaults.model && (!models.length || models.includes(defaults.model)) ? defaults.model : undefined)
-    ?? PREFERRED_MODELS.find((model) => models.includes(model))
-    ?? models[0]
-    ?? PREFERRED_MODELS[0]
+  const modelDefault = defaults.model && (defaults.model === 'auto' || !models.length || models.includes(defaults.model))
+    ? defaults.model
+    : 'auto'
   const modelAnswer = await askLine(`  Model bawaan ${theme.muted(`[${modelDefault}]`)}: `)
   if (modelAnswer === null) return false
   const model = modelAnswer.trim() || modelDefault
-  if (models.length && !models.includes(model)) {
+  if (model !== 'auto' && models.length && !models.includes(model)) {
     console.log(`  ${theme.muted(`Catatan: ${model} tidak ada di daftar model 9Router saat ini.`)}`)
   }
 

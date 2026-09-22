@@ -4,13 +4,18 @@ import { PhaseTally, phaseOf, StatusLine } from '../src/status.ts'
 
 test('pencarian termasuk fase exploring dan terhitung di ringkasannya', () => {
   assert.equal(phaseOf('grep'), 'exploring')
+  assert.equal(phaseOf('tool_search'), 'exploring')
   assert.equal(phaseOf('glob'), 'exploring')
+  assert.equal(phaseOf('delegate'), 'exploring')
   assert.equal(phaseOf('write_file'), 'applying')
   const tally = new PhaseTally()
   tally.record('grep', false, '')
   tally.record('glob', false, '')
   tally.record('read_file', false, 'a.ts')
   assert.equal(tally.exploring(), '1 file, 2 searches')
+
+  tally.record('delegate', false, '')
+  assert.equal(tally.exploring(), '1 file, 2 searches, 1 delegation')
 })
 
 test('ringkasan applying menghitung pemeriksaan dan penghentian proses latar belakang', () => {

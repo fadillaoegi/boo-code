@@ -22,6 +22,7 @@ export const readFileTool: Tool<Args> = {
   name: 'read_file',
   description: DESCRIPTION,
   risk: 'safe',
+  parallelSafe: true,
   schema: {
     type: 'function',
     function: {
@@ -45,6 +46,7 @@ export const readFileTool: Tool<Args> = {
     }
     const target = resolveInWorkspace(context.workspace, args.path)
     const buffer = await readFile(target)
+    context.fileSnapshots?.observe(target, buffer)
     if (!buffer.length) return { content: '(berkas kosong)' }
     if (buffer.subarray(0, 8_000).includes(0)) {
       return { content: `Gagal: ${args.path} adalah berkas biner (${buffer.length} byte), bukan teks.`, isError: true }

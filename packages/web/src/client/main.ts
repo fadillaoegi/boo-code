@@ -7,17 +7,31 @@
  */
 
 import type { ViewItem } from '@boo/core/presentation/view.ts'
-import type { ModelFamilyView, QuestionOption, ServerEvent, SessionView, Snapshot, SpecView } from '../protocol.ts'
+import type { ImageAttachment, ModelFamilyView, QuestionOption, ServerEvent, SessionView, Snapshot, SpecView } from '../protocol.ts'
 import { Api, ApiError, takeToken } from './api.ts'
 import { append, clear, h, renderMarkdown } from './dom.ts'
 import { renderItem, renderQuestion, renderStatus } from './items.ts'
 
 const THEME_KEY = 'boo-code-theme'
-const COMMANDS = [
+const BUILTIN_COMMANDS = [
+  { name: '/plan', hint: 'selidiki dan buat rencana tanpa mengubah file' },
+  { name: '/implement', hint: 'kerjakan rencana terbaru dari /plan' },
   { name: '/spec', hint: 'rancang fitur: requirements, design, tasks' },
   { name: '/undo', hint: 'batalkan perubahan berkas dari permintaan terakhir' },
+  { name: '/restore', hint: 'pulihkan file ke checkpoint lama' },
   { name: '/compact', hint: 'ringkas percakapan agar konteks lega' },
+  { name: '/context', hint: 'lihat pemakaian konteks model' },
+  { name: '/fork', hint: 'cabangkan percakapan ke sesi eksperimen baru' },
+  { name: '/rewind', hint: 'buat cabang dari sebelum prompt lama' },
+  { name: '/stats', hint: 'lihat metrik lokal agent' },
+  { name: '/review', hint: 'review perubahan tanpa mengedit' },
+  { name: '/apps', hint: 'lihat aplikasi lokal yang terdaftar' },
+  { name: '/open', hint: 'buka aplikasi terdaftar' },
+  { name: '/run', hint: 'jalankan perintah dengan persetujuan' },
   { name: '/init', hint: 'tulis BOO.md berisi aturan proyek' },
+  { name: '/commands', hint: 'lihat custom command proyek dan global' },
+  { name: '/hooks', hint: 'lihat lifecycle hooks yang aktif' },
+  { name: '/permissions', hint: 'lihat aturan izin persisten yang aktif' },
   { name: '/help', hint: 'daftar perintah' },
 ]
 
@@ -116,6 +130,8 @@ function start(api: Api): void {
     h('div', { class: 'brand' }, h('img', { src: '/logo.png', alt: '' }), h('div', {}, h('div', { class: 'brand-name' }, 'Boo Code'), workspaceName)),
     workspacePath,
     h('button', { class: 'button primary block', type: 'button', onClick: () => void guard(() => api.post('/api/session/new')) }, '+ Sesi baru'),
+    h('button', { class: 'button block', type: 'button', onClick: () => void guard(() => api.post('/api/session/fork')) }, 'Cabangkan sesi'),
+    h('button', { class: 'button block', type: 'button', onClick: () => void guard(() => api.post('/api/session/rewind')) }, 'Putar balik'),
     h('div', { class: 'nav-title' }, 'Sesi'),
     sessionList,
     h('div', { class: 'nav-title' }, 'Spec', h('button', { class: 'link-button', type: 'button', onClick: () => insertCommand('/spec ') }, '+ baru')),
@@ -203,10 +219,13 @@ function start(api: Api): void {
   const questionSlot = h('div', { class: 'question-slot' })
   const queueSlot = h('div', { class: 'queue-slot' })
   const commandMenu = h('ul', { class: 'command-menu', hidden: true })
+  const attachmentStrip = h('div', { class: 'attachment-strip', hidden: true })
+  const imageInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', multiple: true, hidden: true })
+  const attachButton = h('button', { class: 'button attach', type: 'button', title: 'Lampirkan gambar' }, '＋ Gambar')
   const textarea = h('textarea', { class: 'composer-input', rows: '1', placeholder: 'Minta Boo mengerjakan sesuatu…  (/ untuk perintah)' })
   const sendButton = h('button', { class: 'button primary', type: 'submit' }, 'Kirim')
   const stopButton = h('button', { class: 'button danger', type: 'button', hidden: true, onClick: () => void guard(() => api.post('/api/cancel')) }, 'Stop')
-  const composer = h('form', { class: 'composer' }, commandMenu, textarea, h('div', { class: 'composer-actions' }, stopButton, sendButton))
+  const composer = h('form', { class: 'composer' }, commandMenu, attachmentStrip, imageInput, textarea, h('div', { class: 'composer-actions' }, attachButton, stopButton, sendButton))
   const dock = h('div', { class: 'dock' }, questionSlot, statusSlot, queueSlot, composer)
 
   const main = h('main', { class: 'main' }, topbar, scroller, dock)
@@ -281,7 +300,9 @@ function start(api: Api): void {
   }
 
   const rebuild = (snapshot: Snapshot) => {
+    const previousSession = state.snapshot?.sessionId
     state.snapshot = snapshot
+    if (previousSession !== undefined && previousSession !== snapshot.sessionId) clearAttachments()
     state.items = []
     state.elements.clear()
     clear(log)
@@ -348,7 +369,7 @@ function start(api: Api): void {
   const setBusy = (value: boolean) => {
     busy = value
     stopButton.hidden = !value
-    sendButton.textContent = value ? 'Antre' : 'Kirim'
+    sendButton.textContent = value ? 'Arahkan' : 'Kirim'
     document.body.classList.toggle('busy', value)
     if (!value) refreshLists()
   }
@@ -359,6 +380,47 @@ function start(api: Api): void {
   }
 
   /* ---------------------------------------------------------- kotak ketik */
+
+  const pendingAttachments: ImageAttachment[] = []
+
+  function clearAttachments(): void {
+    pendingAttachments.length = 0
+    renderAttachments()
+  }
+
+  function renderAttachments(): void {
+    clear(attachmentStrip)
+    attachmentStrip.hidden = !pendingAttachments.length
+    for (const attachment of pendingAttachments) {
+      attachmentStrip.append(h('span', { class: 'attachment-chip' },
+        `▧ ${attachment.name}`,
+        h('button', {
+          type: 'button', title: `Lepas ${attachment.name}`,
+          onClick: () => {
+            const index = pendingAttachments.findIndex((item) => item.id === attachment.id && item.ref === attachment.ref)
+            if (index !== -1) pendingAttachments.splice(index, 1)
+            renderAttachments()
+          },
+        }, '×'),
+      ))
+    }
+  }
+
+  attachButton.addEventListener('click', () => imageInput.click())
+  imageInput.addEventListener('change', () => {
+    const files = [...(imageInput.files ?? [])]
+    imageInput.value = ''
+    void guard(async () => {
+      for (const file of files) {
+        if (pendingAttachments.length >= 5) throw new Error('Maksimal lima gambar per prompt.')
+        if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name} melebihi batas 10 MiB.`)
+        attachButton.setAttribute('disabled', '')
+        try { pendingAttachments.push(await api.uploadImage(file)) } finally { attachButton.removeAttribute('disabled') }
+        renderAttachments()
+      }
+      textarea.focus()
+    })
+  })
 
   const resize = () => {
     textarea.style.height = 'auto'
@@ -374,25 +436,29 @@ function start(api: Api): void {
 
   const updateCommandMenu = () => {
     const value = textarea.value
-    const matches = value.startsWith('/') && !value.includes(' ') ? COMMANDS.filter((command) => command.name.startsWith(value)) : []
+    const custom = (state.snapshot?.commands ?? []).map((command) => ({ name: `/${command.name}`, hint: `${command.description} · ${command.source}` }))
+    const commands = [...BUILTIN_COMMANDS, ...custom]
+    const matches = value.startsWith('/') && !value.includes(' ') ? commands.filter((command) => command.name.startsWith(value)) : []
     commandMenu.hidden = !matches.length
     clear(commandMenu)
     for (const command of matches) {
       commandMenu.append(h('li', {}, h('button', {
         type: 'button',
-        onClick: () => insertCommand(command.name === '/spec' ? '/spec ' : command.name),
+        onClick: () => insertCommand(command.name === '/spec' || command.name === '/plan' || custom.includes(command) ? `${command.name} ` : command.name),
       }, h('strong', {}, command.name), h('span', {}, command.hint))))
     }
   }
 
   const submit = () => {
     const text = textarea.value.trim()
-    if (!text) return
+    if (!text && !pendingAttachments.length) return
+    const attachments = pendingAttachments.splice(0)
     textarea.value = ''
+    renderAttachments()
     resize()
     updateCommandMenu()
     stick = true
-    void guard(() => api.post('/api/submit', { text }))
+    void guard(() => api.post('/api/submit', { text, attachments }))
   }
 
   composer.addEventListener('submit', (event) => {
@@ -422,22 +488,29 @@ function start(api: Api): void {
   const openModels = async () => {
     clear(dialog)
     dialog.append(h('div', { class: 'dialog-head' }, h('strong', {}, 'Pilih model'), h('button', { class: 'icon-button', type: 'button', onClick: () => dialog.close() }, '✕')))
-    const body = h('div', { class: 'dialog-body' }, h('p', { class: 'muted' }, 'Memuat daftar model dari 9Router…'))
+    const choose = (modelId: string, effort: string | null) => {
+      dialog.close()
+      void guard(() => api.post('/api/model', { modelId, effort }))
+    }
+    const autoActive = state.snapshot?.model.mode === 'auto'
+    const manual = h('div', {}, h('p', { class: 'muted' }, 'Memuat daftar model dari 9Router…'))
+    const body = h('div', { class: 'dialog-body' },
+      h('button', { class: `model-row${autoActive ? ' active' : ''}`, type: 'button', onClick: () => choose('auto', null) },
+        h('span', { class: 'model-name' }, 'Auto · sesuai kesulitan tugas'), autoActive ? h('span', { class: 'tag' }, 'aktif') : null),
+      h('p', { class: 'muted' }, 'Model dan tingkat penalaran dipilih ulang untuk setiap permintaan.'),
+      manual,
+    )
     dialog.append(body)
     dialog.showModal()
     let families: ModelFamilyView[]
     try {
       families = (await api.get<{ families: ModelFamilyView[] }>('/api/models')).families
     } catch (error) {
-      clear(body)
-      body.append(h('p', { class: 'error-text' }, error instanceof Error ? error.message : 'Gagal memuat model.'))
+      clear(manual)
+      manual.append(h('p', { class: 'error-text' }, error instanceof Error ? error.message : 'Gagal memuat model.'))
       return
     }
-    clear(body)
-    const choose = (modelId: string, effort: string | null) => {
-      dialog.close()
-      void guard(() => api.post('/api/model', { modelId, effort }))
-    }
+    clear(manual)
     const familyRow = (family: ModelFamilyView) => {
       const active = family.options.some((option) => option.current)
       if (family.options.length === 1) {
@@ -455,9 +528,9 @@ function start(api: Api): void {
     }
     const featured = families.filter((family) => family.featured)
     const others = families.filter((family) => !family.featured)
-    body.append(h('div', { class: 'model-list' }, featured.map(familyRow)))
+    manual.append(h('div', { class: 'model-list' }, featured.map(familyRow)))
     if (others.length) {
-      body.append(h('details', { class: 'more-models' }, h('summary', {}, `Model lain (${others.length})`), h('div', { class: 'model-list' }, others.map(familyRow))))
+      manual.append(h('details', { class: 'more-models' }, h('summary', {}, `Model lain (${others.length})`), h('div', { class: 'model-list' }, others.map(familyRow))))
     }
   }
   modelButton.addEventListener('click', () => void openModels())
@@ -514,9 +587,11 @@ function start(api: Api): void {
         setQuestion(event.question)
         break
       case 'model':
+        if (state.snapshot) state.snapshot.model = event.model
         setModel(event.model.label)
         break
       case 'session':
+        if (state.snapshot) state.snapshot.sessionId = event.sessionId
         refreshLists()
         break
     }

@@ -17,18 +17,64 @@ export type ActivityLabel =
   | 'Running'
   | 'Checking'
   | 'Planning'
+  | 'Waiting'
 
 const TOOL_LABEL: Record<string, ActivityLabel> = {
   list_dir: 'Searching',
   glob: 'Searching',
   grep: 'Searching',
+  tool_search: 'Searching',
+  code_search: 'Searching',
+  code_graph: 'Searching',
+  test_impact: 'Checking',
+  repo_map: 'Searching',
+  web_search: 'Searching',
+  web_fetch: 'Reading',
+  diagnostics: 'Checking',
+  lsp: 'Checking',
+  delegate: 'Orchestrating',
+  delegate_write: 'Orchestrating',
+  memory_list: 'Reading',
+  memory_add: 'Writing',
+  memory_remove: 'Writing',
+  list_skills: 'Searching',
+  read_skill: 'Reading',
+  read_skill_resource: 'Reading',
+  list_mcp_servers: 'Searching',
+  mcp_list_tools: 'Checking',
+  mcp_call: 'Running',
+  git_status: 'Checking',
+  git_changed_files: 'Checking',
+  git_diff: 'Reading',
+  git_log: 'Searching',
+  git_show: 'Reading',
+  git_blame: 'Reading',
+  git_commit: 'Writing',
+  list_apps: 'Searching',
+  open_app: 'Running',
+  browser_status: 'Checking',
+  browser_tabs: 'Reading',
+  browser_open: 'Running',
+  browser_navigate: 'Running',
+  browser_snapshot: 'Reading',
+  browser_diagnostics: 'Checking',
+  browser_click: 'Running',
+  browser_type: 'Running',
+  browser_select: 'Running',
+  browser_press: 'Running',
+  whatsapp_status: 'Checking',
+  whatsapp_send_message: 'Running',
   read_file: 'Reading',
+  read_tool_output: 'Reading',
   write_file: 'Writing',
   edit_file: 'Implementing',
+  apply_patch: 'Implementing',
   bash: 'Running',
   bash_output: 'Checking',
+  bash_input: 'Running',
   bash_kill: 'Running',
   todo_write: 'Planning',
+  ask_user: 'Waiting',
 }
 
 /** Label untuk tool; tool yang tidak dikenal dianggap mengubah sesuatu. */
@@ -135,11 +181,37 @@ function pluralLines(count: number): string {
  * perintah untuk bash, dan jumlah baris untuk berkas yang ditulis.
  */
 export function describeArgs(tool: string, args: Record<string, unknown>): string {
-  if (typeof args.command === 'string') return args.run_in_background ? `${args.command} · background` : args.command
-  if ((tool === 'bash_output' || tool === 'bash_kill') && typeof args.id === 'string') return args.id
+  if (tool === 'tool_search' && typeof args.query === 'string') return `“${args.query}”`
+  if (tool === 'ask_user' && Array.isArray(args.questions)) return `${args.questions.length} question${args.questions.length === 1 ? '' : 's'}`
+  if (tool === 'git_commit' && typeof args.message === 'string') return args.message.split(/\r?\n/, 1)[0]
+  if ((tool === 'git_log' || tool === 'git_show' || tool === 'git_blame') && typeof args.path === 'string') return args.path
+  if (typeof args.command === 'string') {
+    if (!args.run_in_background) return args.command
+    return `${args.command} · background${args.interactive ? ' · interactive' : ''}`
+  }
+  if ((tool === 'bash_output' || tool === 'bash_input' || tool === 'bash_kill') && typeof args.id === 'string') return args.id
+  if (tool === 'open_app' && typeof args.id === 'string') return args.id
+  if (tool === 'browser_open' && typeof args.url === 'string') return args.url
+  if (tool.startsWith('browser_') && typeof args.description === 'string') return args.description
+  if (tool.startsWith('browser_') && typeof args.tab_id === 'string') return args.tab_id
+  if (tool === 'whatsapp_send_message' && typeof args.recipient === 'string') return args.recipient
+  if (tool === 'mcp_list_tools' && typeof args.server === 'string') return args.server
+  if (tool === 'mcp_call' && typeof args.server === 'string' && typeof args.tool === 'string') return `${args.server}/${args.tool}`
+  if (tool === 'delegate' && Array.isArray(args.tasks)) return `${args.tasks.length} read-only task${args.tasks.length === 1 ? '' : 's'}`
+  if (tool === 'delegate_write' && Array.isArray(args.tasks)) return `${args.tasks.length} isolated implementation task${args.tasks.length === 1 ? '' : 's'}`
+  if (tool === 'memory_add' && typeof args.text === 'string') return args.text
+  if (tool === 'memory_remove' && typeof args.id === 'string') return args.id
+  if (tool === 'web_search' && typeof args.query === 'string') return `“${args.query}”`
+  if (tool === 'web_fetch' && typeof args.url === 'string') return args.url
   if ((tool === 'grep' || tool === 'glob') && typeof args.pattern === 'string') {
     const where = typeof args.path === 'string' && args.path !== '.' ? ` in ${args.path}` : ''
     return tool === 'grep' ? `"${args.pattern}"${where}` : `${args.pattern}${where}`
+  }
+  if (tool === 'code_search' && typeof args.query === 'string') return `"${args.query}"${typeof args.path === 'string' ? ` in ${args.path}` : ''}`
+  if (tool === 'test_impact' && Array.isArray(args.changed_files)) return `${args.changed_files.length} changed file${args.changed_files.length === 1 ? '' : 's'}`
+  if (tool === 'repo_map') {
+    if (typeof args.query === 'string' && args.query) return `"${args.query}"${typeof args.path === 'string' ? ` in ${args.path}` : ''}`
+    return typeof args.path === 'string' ? args.path : '.'
   }
   const path = typeof args.path === 'string' ? args.path : tool === 'list_dir' ? '.' : ''
   if (tool === 'read_file' && path && typeof args.offset === 'number') {

@@ -88,6 +88,19 @@ test('tukar-jawab dipisah baris kosong dan pertanyaan multibaris tetap utuh', ()
   assert.match(output, /oke\n\n› lanjut/)
 })
 
+test('arahan tengah jalan dipulihkan tanpa marker internal', async () => {
+  const { USER_STEERING_MARK } = await import('@boo/core')
+  const output = screen([
+    { role: 'user', content: 'refactor modul' },
+    call('c1', 'read_file', { path: 'app.ts' }),
+    result('c1', 'isi'),
+    { role: 'user', content: `${USER_STEERING_MARK}\njangan ubah API publik` },
+    { role: 'assistant', content: 'Siap.' },
+  ])
+  assert.match(output, /↳ jangan ubah API publik/)
+  assert.doesNotMatch(output, /USER STEERING/)
+})
+
 test('hasil tool yang berjalan tetap diringkas walau panggilan lain ditolak', () => {
   const output = screen([
     { role: 'user', content: 'ubah dua berkas' },

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Agent } from '../src/agent/loop.ts'
@@ -117,4 +117,89 @@ test('edit_file tidak menafsirkan $ di teks pengganti', async () => {
   writeFileSync(join(dir, 'skrip.sh'), 'echo PID\n')
   await editFileTool.run({ path: 'skrip.sh', old_text: 'PID', new_text: "$$ $& $1 $'" }, { workspace: dir })
   assert.equal(readFileSync(join(dir, 'skrip.sh'), 'utf8'), "echo $$ $& $1 $'\n")
+})
+
+test('restore mengembalikan checkpoint terpilih dan semua perubahan sesudahnya', async () => {
+  const dir = workspace()
+  const agent = agentFor(dir, [
+    [
+      call('1a', 'edit_file', { path: 'src/app.ts', old_text: '1', new_text: '2' }),
+      call('1b', 'write_file', { path: 'versi.txt', content: 'v1\n' }),
+    ],
+    [
+      call('2a', 'edit_file', { path: 'src/app.ts', old_text: '2', new_text: '3' }),
+      call('2b', 'write_file', { path: 'versi.txt', content: 'v2\n' }),
+    ],
+    [call('3', 'write_file', { path: 'baru/final.txt', content: 'baru\n' })],
+  ])
+  await run(agent, 'checkpoint pertama')
+  await run(agent, 'checkpoint kedua')
+  await run(agent, 'checkpoint ketiga')
+
+  const points = agent.checkpoints.restorePoints()
+  assert.deepEqual(points.map((point) => [point.checkpointId, point.prompt, point.files]), [
+    [3, 'checkpoint ketiga', 1],
+    [2, 'checkpoint kedua', 2],
+    [1, 'checkpoint pertama', 2],
+  ])
+  const plan = await agent.checkpoints.planRestore(2)
+  assert.equal(plan?.checkpointCount, 2)
+  assert.deepEqual(plan?.entries.map((entry) => [entry.label, entry.action, entry.modifiedSince]), [
+    ['baru/final.txt', 'delete', false],
+    ['src/app.ts', 'restore', false],
+    ['versi.txt', 'restore', false],
+  ])
+  await agent.restore(2, plan!.fingerprint)
+
+  assert.equal(readFileSync(join(dir, 'src/app.ts'), 'utf8'), 'const a = 2\n')
+  assert.equal(readFileSync(join(dir, 'versi.txt'), 'utf8'), 'v1\n')
+  assert.equal(existsSync(join(dir, 'baru')), false)
+  assert.deepEqual(agent.checkpoints.restorePoints().map((point) => point.checkpointId), [1])
+})
+
+test('restore menolak fingerprint stale dan menandai perubahan pengguna saat ditinjau ulang', async () => {
+  const dir = workspace()
+  const agent = agentFor(dir, [[call('1', 'edit_file', { path: 'src/app.ts', old_text: '1', new_text: '2' })]])
+  await run(agent, 'ubah app')
+  const preview = await agent.checkpoints.planRestore(1)
+  writeFileSync(join(dir, 'src/app.ts'), 'const a = 2\n// edit pengguna\n')
+
+  await assert.rejects(() => agent.restore(1, preview!.fingerprint), /berubah setelah pratinjau/)
+  assert.equal(readFileSync(join(dir, 'src/app.ts'), 'utf8'), 'const a = 2\n// edit pengguna\n')
+  const reviewed = await agent.checkpoints.planRestore(1)
+  assert.equal(reviewed?.entries[0]?.modifiedSince, true)
+  await agent.restore(1, reviewed!.fingerprint)
+  assert.equal(readFileSync(join(dir, 'src/app.ts'), 'utf8'), 'const a = 1\n')
+})
+
+test('restore menandai edit pengguna yang terjadi di antara dua checkpoint Boo', async () => {
+  const dir = workspace()
+  const agent = agentFor(dir, [
+    [call('1', 'edit_file', { path: 'src/app.ts', old_text: '1', new_text: '2' })],
+    [call('2', 'write_file', { path: 'src/app.ts', content: 'const a = 3\n' })],
+  ])
+  await run(agent, 'ubah ke dua')
+  writeFileSync(join(dir, 'src/app.ts'), 'const a = 2\n// edit pengguna\n')
+  await run(agent, 'ubah ke tiga')
+
+  const plan = await agent.checkpoints.planRestore(1)
+  assert.equal(plan?.entries[0]?.modifiedSince, true)
+})
+
+test('restore menolak symlink sebelum menyentuh file lain', { skip: process.platform === 'win32' }, async () => {
+  const dir = workspace()
+  const outside = join(mkdtempSync(join(tmpdir(), 'boo-restore-outside-')), 'target.txt')
+  writeFileSync(outside, 'jangan disentuh\n')
+  const agent = agentFor(dir, [[
+    call('1a', 'write_file', { path: 'a.txt', content: 'dibuat\n' }),
+    call('1b', 'write_file', { path: 'b.txt', content: 'dibuat\n' }),
+  ]])
+  await run(agent, 'buat dua file')
+  writeFileSync(join(dir, 'b.txt'), '')
+  unlinkSync(join(dir, 'b.txt'))
+  symlinkSync(outside, join(dir, 'b.txt'))
+
+  await assert.rejects(() => agent.checkpoints.planRestore(1), /melewati symlink/)
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'dibuat\n')
+  assert.equal(readFileSync(outside, 'utf8'), 'jangan disentuh\n')
 })

@@ -19,6 +19,7 @@ export class PhaseTally {
   private filesRead = 0
   private dirsListed = 0
   private searches = 0
+  private delegations = 0
   private readonly changed: string[] = []
   private commands = 0
   private checks = 0
@@ -29,6 +30,7 @@ export class PhaseTally {
     this.filesRead = 0
     this.dirsListed = 0
     this.searches = 0
+    this.delegations = 0
     this.changed.length = 0
     this.commands = 0
     this.checks = 0
@@ -42,23 +44,63 @@ export class PhaseTally {
       case 'read_file':
         this.filesRead += 1
         break
+      case 'read_tool_output':
+        this.searches += 1
+        break
       case 'list_dir':
         this.dirsListed += 1
         break
       case 'glob':
       case 'grep':
+      case 'tool_search':
+      case 'code_search':
+      case 'code_graph':
+      case 'test_impact':
+      case 'git_status':
+      case 'git_changed_files':
+      case 'git_diff':
+      case 'git_log':
+      case 'git_show':
+      case 'git_blame':
+      case 'repo_map':
+      case 'web_search':
+      case 'web_fetch':
+      case 'browser_status':
+      case 'browser_tabs':
+      case 'browser_snapshot':
+      case 'browser_diagnostics':
+      case 'lsp':
+      case 'list_skills':
+      case 'read_skill':
+      case 'read_skill_resource':
+      case 'list_mcp_servers':
+      case 'mcp_list_tools':
+      case 'memory_list':
         this.searches += 1
         break
+      case 'delegate':
+      case 'delegate_write':
+        this.delegations += 1
+        break
       case 'bash':
+      case 'bash_input':
         this.commands += 1
         break
+      case 'git_commit':
+        if (!isError && !this.changed.includes('Git commit')) this.changed.push('Git commit')
+        break
       case 'bash_output':
+      case 'diagnostics':
         this.checks += 1
         break
       case 'bash_kill':
         this.stopped += 1
         break
       case 'todo_write':
+        break
+      case 'memory_add':
+      case 'memory_remove':
+        if (!isError && !this.changed.includes('project memory')) this.changed.push('project memory')
         break
       default:
         if (!isError && target && !this.changed.includes(target)) this.changed.push(target)
@@ -71,6 +113,7 @@ export class PhaseTally {
     if (this.filesRead) parts.push(`${this.filesRead} file${this.filesRead > 1 ? 's' : ''}`)
     if (this.dirsListed) parts.push(`${this.dirsListed} director${this.dirsListed > 1 ? 'ies' : 'y'}`)
     if (this.searches) parts.push(`${this.searches} search${this.searches > 1 ? 'es' : ''}`)
+    if (this.delegations) parts.push(`${this.delegations} delegation${this.delegations > 1 ? 's' : ''}`)
     return parts.join(', ') || 'scanning'
   }
 
@@ -87,7 +130,7 @@ export class PhaseTally {
 }
 
 /** Menentukan fase dari nama tool. */
-const EXPLORING_TOOLS = new Set(['read_file', 'list_dir', 'glob', 'grep'])
+const EXPLORING_TOOLS = new Set(['read_file', 'read_tool_output', 'list_dir', 'glob', 'grep', 'tool_search', 'code_search', 'code_graph', 'test_impact', 'repo_map', 'web_search', 'web_fetch', 'browser_status', 'browser_tabs', 'browser_snapshot', 'browser_diagnostics', 'git_status', 'git_changed_files', 'git_diff', 'git_log', 'git_show', 'git_blame', 'lsp', 'delegate', 'memory_list', 'list_skills', 'read_skill', 'read_skill_resource', 'list_mcp_servers', 'mcp_list_tools'])
 
 export function phaseOf(tool: string): Phase {
   return EXPLORING_TOOLS.has(tool) ? 'exploring' : 'applying'

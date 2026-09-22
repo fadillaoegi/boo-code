@@ -9,11 +9,13 @@
  * Modul ini tidak mengimpor apa pun dari Node.
  */
 
+import type { ImageAttachment } from '@boo/core'
 import type { ViewItem } from '@boo/core/presentation/view.ts'
 
-export type { ViewItem }
+export type { ImageAttachment, ViewItem }
 
 export interface ModelView {
+  mode: 'manual' | 'auto'
   id: string
   effort: string | null
   /** Nama untuk manusia, misalnya "GPT-5.6 Sol · Extra High". */
@@ -73,6 +75,12 @@ export interface SpecView {
   total: number
 }
 
+export interface PromptCommandView {
+  name: string
+  description: string
+  source: 'global' | 'project'
+}
+
 export interface Snapshot {
   version: string
   workspace: string
@@ -86,6 +94,7 @@ export interface Snapshot {
   status: StatusView | null
   question: QuestionView | null
   instructions: string[]
+  commands: PromptCommandView[]
 }
 
 export type ServerEvent =

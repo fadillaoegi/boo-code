@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { normalizePaste, PasteStore } from '../src/paste.ts'
+import { isShiftEnter, MultilineInput, normalizePaste, PasteStore } from '../src/paste.ts'
 
 test('tempelan satu baris disisipkan apa adanya', () => {
   const store = new PasteStore()
@@ -25,4 +25,19 @@ test('penanda yang diketik sendiri tanpa tempelan dibiarkan', () => {
 
 test('baris baru CRLF dan CR disamakan', () => {
   assert.equal(normalizePaste('a\r\nb\rc\n\n'), 'a\nb\nc')
+})
+
+test('Shift+Enter dari terminal modern maupun lama dikenali', () => {
+  assert.equal(isShiftEnter({ name: 'return', shift: true, sequence: '\r' }), true)
+  assert.equal(isShiftEnter({ name: 'return', meta: true, sequence: '\u001b\r' }), true)
+  assert.equal(isShiftEnter({ sequence: '\u001b[13;2u' }), true)
+  assert.equal(isShiftEnter({ name: 'return', sequence: '\r' }), false)
+})
+
+test('baris Shift+Enter disatukan dan Enter biasa mengirim seluruh prompt', () => {
+  const input = new MultilineInput()
+  input.continue('jelaskan error ini:')
+  input.continue('  TypeError: x')
+  assert.equal(input.submit('dan cara memperbaikinya'), 'jelaskan error ini:\n  TypeError: x\ndan cara memperbaikinya')
+  assert.equal(input.submit('pesan berikutnya'), 'pesan berikutnya')
 })

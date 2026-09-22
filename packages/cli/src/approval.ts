@@ -141,7 +141,7 @@ export function undoBody(plan: UndoPlan): StyledRun[][] {
   }
   if (plan.ranCommands) {
     rows.push([])
-    rows.push([{ text: 'Perubahan oleh perintah bash di permintaan ini tidak ikut dibatalkan.', style: MUTED }])
+    rows.push([{ text: 'Perubahan oleh command tidak tercatat dan tidak ikut dikembalikan.', style: MUTED }])
   }
   return rows
 }

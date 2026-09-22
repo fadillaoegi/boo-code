@@ -7,17 +7,41 @@
  */
 
 import { splitUndoNote } from '../agent/checkpoints.ts'
+import { promptCommandTitle } from '../agent/commands.ts'
+import { completionHookFeedback } from '../agent/hooks.ts'
+import { referencedPromptTitle } from '../agent/references.ts'
 import { CANCELLED_REPLY, FAILED_REPLY_PREFIX, TURN_LIMIT_REPLY_PREFIX } from '../agent/loop.ts'
+import { isImplementPlanRequest, planPromptTitle } from '../agent/planning.ts'
 import type { Message } from '../domain/message.ts'
 import { specPromptTitle } from '../spec/specs.ts'
 import { parseTodos } from '../tools/todo.ts'
+import { userAnswerSummary } from '../tools/askUser.ts'
+import { steeringPromptTitle, STEERING_SKIPPED_TOOL_RESULT } from '../agent/steering.ts'
 import { PhaseTally, phaseOf, type Phase } from './phases.ts'
 import type { ViewItem } from './view.ts'
 
 const TOOL_TITLE: Record<string, string> = {
   write_file: 'Tulis berkas',
   edit_file: 'Ubah berkas',
+  apply_patch: 'Terapkan patch',
   bash: 'Jalankan perintah',
+  diagnostics: 'Jalankan diagnostics',
+  lsp: 'Query language server',
+  delegate: 'Delegasikan investigasi',
+  delegate_write: 'Delegasikan implementasi',
+  mcp_list_tools: 'Jalankan MCP server',
+  mcp_call: 'Panggil MCP tool',
+  open_app: 'Buka aplikasi',
+  browser_tabs: 'Lihat tab browser',
+  browser_open: 'Buka tab browser',
+  browser_navigate: 'Navigasi tab browser',
+  browser_snapshot: 'Baca halaman browser',
+  browser_diagnostics: 'Diagnostik browser',
+  browser_click: 'Klik di browser',
+  browser_type: 'Ketik di browser',
+  browser_select: 'Pilih dropdown browser',
+  browser_press: 'Tekan tombol browser',
+  whatsapp_send_message: 'Kirim pesan WhatsApp',
 }
 
 interface PendingCall {
@@ -66,8 +90,8 @@ function splitMarker(content: string): { text: string; notice: Omit<Extract<View
 
 function denialText(call: PendingCall, content: string): string {
   const title = TOOL_TITLE[call.name] ?? call.name
-  const { command, path } = call.args
-  const target = typeof command === 'string' ? ` · ${command}` : typeof path === 'string' ? ` ${path}` : ''
+  const { command, path, id, recipient } = call.args
+  const target = typeof command === 'string' ? ` · ${command}` : typeof path === 'string' ? ` ${path}` : typeof id === 'string' ? ` ${id}` : typeof recipient === 'string' ? ` ${recipient}` : ''
   const feedback = /dengan arahan: ([^\n]*)/.exec(content)?.[1]
   return `${title}${target} · ditolak${feedback ? `: ${feedback}` : ''}`
 }
@@ -92,13 +116,25 @@ function buildExchange(exchange: readonly Message[], prefix: string): ViewItem[]
   for (const message of exchange) {
     if (message.role === 'user') {
       const { note, text } = splitUndoNote(message.content ?? '')
-      const spec = specPromptTitle(text)
+      const original = referencedPromptTitle(text) ?? text
+      const steering = steeringPromptTitle(original)
+      const hookFeedback = completionHookFeedback(text)
+      if (hookFeedback !== null) {
+        items.push({ kind: 'notice', id: nextId(), variant: 'error', text: `Hook on_complete meminta perbaikan: ${hookFeedback}` })
+        if (steering === null) continue
+      }
+      const spec = specPromptTitle(original)
+      const plan = planPromptTitle(original)
+      const command = promptCommandTitle(original)
+      const visibleText = steering ?? (spec !== null ? `/spec · ${spec}` : plan !== null ? `/plan ${plan}` : isImplementPlanRequest(original) ? '/implement' : command ?? original)
       items.push({
         kind: 'user',
         id: nextId(),
-        text: spec === null ? text : `/spec · ${spec}`,
+        text: visibleText,
+        ...(message.images?.length ? { attachments: message.images.map((image) => image.name) } : {}),
         ...(spec === null ? {} : { spec }),
         ...(note ? { afterUndo: true } : {}),
+        ...(steering === null ? {} : { steering: true }),
       })
       continue
     }
@@ -118,11 +154,20 @@ function buildExchange(exchange: readonly Message[], prefix: string): ViewItem[]
       const call = calls.get(message.tool_call_id ?? '')
       if (!call) continue
       const content = message.content ?? ''
+      if (content === STEERING_SKIPPED_TOOL_RESULT) continue
       if (call.name === 'todo_write') {
         const todos = parseTodos(call.args.todos)
         if (typeof todos !== 'string' && !content.startsWith('Gagal')) {
           flushPhase()
           items.push({ kind: 'todos', id: nextId(), items: todos })
+        }
+        continue
+      }
+      if (call.name === 'ask_user') {
+        const summary = userAnswerSummary(content)
+        if (summary) {
+          flushPhase()
+          items.push({ kind: 'decision', id: nextId(), allowed: true, text: `Jawaban · ${summary}` })
         }
         continue
       }

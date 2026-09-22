@@ -17,10 +17,14 @@ export type ViewItem =
       kind: 'user'
       id: string
       text: string
+      /** Nama attachment gambar; byte gambar tidak pernah masuk event UI. */
+      attachments?: string[]
       /** Judul permintaan mode spec; isinya yang panjang tidak ditampilkan. */
       spec?: string
       /** Permintaan ini didahului /undo. */
       afterUndo?: boolean
+      /** Koreksi yang dikirim ketika request sebelumnya masih berjalan. */
+      steering?: boolean
     }
   | { kind: 'answer'; id: string; markdown: string }
   | {

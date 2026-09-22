@@ -8,6 +8,10 @@
     "unlink": "pnpm --filter boo-code unlink --global",
     "lint": "eslint .",
     "test": "node --test packages/*/tests/*.test.ts",
+    "eval": "node scripts/eval.ts",
+    "eval:validate": "node scripts/eval.ts evals/benchmark.json --validate",
+    "eval:smoke": "node scripts/eval.ts evals/smoke.json",
+    "eval:benchmark": "node scripts/eval.ts evals/benchmark.json",
     "typecheck": "tsc -b",
     "release": "node scripts/release.ts"
   },

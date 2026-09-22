@@ -11,6 +11,7 @@
 
 import type { ChildProcess } from 'node:child_process'
 import { cleanOutput, startCommand, terminate, TAIL_CHARACTERS, type Shell } from './shell.ts'
+import type { SandboxPolicy } from './sandbox.ts'
 
 export type BackgroundStatus = 'running' | 'exited' | 'killed'
 
@@ -25,6 +26,7 @@ interface BackgroundProcess {
   /** Keluaran yang belum dibaca agent, dibatasi agar memori tidak tumbuh tanpa batas. */
   unread: string
   droppedCharacters: number
+  interactive: boolean
 }
 
 export interface BackgroundSnapshot {
@@ -36,6 +38,11 @@ export interface BackgroundSnapshot {
   droppedCharacters: number
 }
 
+export interface BackgroundInputResult {
+  ok: boolean
+  error?: string
+}
+
 export class BackgroundProcesses {
   private readonly processes = new Map<string, BackgroundProcess>()
   private counter = 0
@@ -45,7 +52,7 @@ export class BackgroundProcesses {
     this.limit = limit
   }
 
-  start(command: string, cwd: string, shell?: Shell): string {
+  start(command: string, cwd: string, shell?: Shell, sandbox?: SandboxPolicy, interactive = false): string {
     this.counter += 1
     const id = `bg${this.counter}`
     const entry: BackgroundProcess = {
@@ -57,9 +64,12 @@ export class BackgroundProcesses {
       startedAt: Date.now(),
       unread: '',
       droppedCharacters: 0,
+      interactive,
       child: startCommand(command, {
         cwd,
         ...(shell ? { shell } : {}),
+        ...(sandbox ? { sandbox } : {}),
+        stdin: interactive ? 'pipe' : 'ignore',
         onOutput: (chunk) => {
           entry.unread += chunk
           if (entry.unread.length > this.limit * 2) {
@@ -79,6 +89,26 @@ export class BackgroundProcesses {
     })
     this.processes.set(id, entry)
     return id
+  }
+
+  /** Mengirim teks ke stdin proses interaktif yang masih hidup. */
+  async write(id: string, input: string, close = false): Promise<BackgroundInputResult> {
+    const entry = this.processes.get(id)
+    if (!entry) return { ok: false, error: `tidak ada proses latar belakang dengan id "${id}"` }
+    if (entry.status !== 'running') return { ok: false, error: `proses ${id} sudah ${entry.status === 'killed' ? 'dihentikan' : 'selesai'}` }
+    if (!entry.interactive) return { ok: false, error: `proses ${id} tidak dimulai dengan interactive: true` }
+    const stream = entry.child.stdin
+    if (!stream || stream.destroyed || stream.writableEnded) return { ok: false, error: `stdin proses ${id} sudah tertutup` }
+
+    return new Promise((resolve) => {
+      const done = (error?: Error | null) => resolve(error ? { ok: false, error: error.message } : { ok: true })
+      try {
+        if (close) stream.end(input, 'utf8', done)
+        else stream.write(input, 'utf8', done)
+      } catch (error) {
+        done(error instanceof Error ? error : new Error('gagal menulis stdin'))
+      }
+    })
   }
 
   /** Keluaran baru sejak pembacaan terakhir, beserta status proses. */

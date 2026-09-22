@@ -11,7 +11,10 @@
  *   `arguments` datang terpecah antar chunk.
  */
 
+import { homedir } from 'node:os'
+import { imageDataUrl } from '../agent/attachments.ts'
 import type { Message, ToolCall, ToolSchema } from '../domain/message.ts'
+import { redactOutboundMessages } from '../security/redaction.ts'
 
 export interface ProviderOptions {
   baseUrl: string
@@ -24,6 +27,8 @@ export interface ProviderOptions {
    */
   reasoningEffort?: string
   timeoutMs?: number
+  /** Root penyimpanan attachment; terutama diganti pada test. */
+  home?: string
 }
 
 export type StreamEvent =
@@ -89,6 +94,29 @@ function errorMessage(rawBody: string, status: number): string {
   }
 }
 
+type WireMessage = Omit<Message, 'content' | 'images'> & {
+  content?: string | null | Array<
+    | { type: 'text'; text: string }
+    | { type: 'image_url'; image_url: { url: string; detail: 'auto' } }
+  >
+}
+
+/** Referensi file privat hanya dibaca sesaat sebelum request dan tidak dikirim sebagai path. */
+function wireMessages(messages: readonly Message[], home: string, apiKey: string): WireMessage[] {
+  const outbound = redactOutboundMessages(messages, { secrets: [apiKey], environment: process.env }).messages
+  return outbound.map(({ images, ...message }) => {
+    if (!images?.length) return message
+    if (message.role !== 'user') throw new ProviderError('Attachment gambar hanya boleh berada pada pesan pengguna.', { retryable: false })
+    return {
+      ...message,
+      content: [
+        ...(message.content ? [{ type: 'text' as const, text: message.content }] : []),
+        ...images.map((image) => ({ type: 'image_url' as const, image_url: { url: imageDataUrl(image, home), detail: 'auto' as const } })),
+      ],
+    }
+  })
+}
+
 /** Status yang biasanya pulih sendiri: limit, dan gangguan di sisi server. */
 const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504, 529])
 /** Jeda dari 9Router lebih lama dari ini tidak ditunggu otomatis. */
@@ -119,13 +147,16 @@ export class ProviderError extends Error {
 
 /** Mengklasifikasikan respons HTTP yang gagal. */
 export function httpError(rawBody: string, status: number): ProviderError {
-  const message = errorMessage(rawBody, status)
+  let message = errorMessage(rawBody, status)
   // Status provider di dalam pesan lebih jujur daripada status HTTP 9Router sendiri.
   const inner = /\[(\d{3})\]:/.exec(message)
   const effective = inner ? Number(inner[1]) : status
   const reset = /reset after (\d+)\s*s/i.exec(message)
   const retryAfterMs = reset ? Number(reset[1]) * 1_000 : undefined
   const retryable = TRANSIENT_STATUS.has(effective) && (retryAfterMs === undefined || retryAfterMs <= MAX_RETRY_AFTER_MS)
+  if (effective === 400 && /(?:image|vision|multimodal|image_url)/i.test(message)) {
+    message = `${message}\nModel ini mungkin tidak mendukung input gambar; pilih model vision-capable atau gunakan mode Auto.`
+  }
   return new ProviderError(message, { status: effective, retryable, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) })
 }
 
@@ -161,13 +192,18 @@ export class NineRouterProvider {
     this.options.reasoningEffort = effort
   }
 
+  /** Provider penilai memakai koneksi yang sama tanpa mengganti model agent. */
+  fork(model: string, reasoningEffort?: string): NineRouterProvider {
+    return new NineRouterProvider({ ...this.options, model, reasoningEffort, timeoutMs: 12_000 })
+  }
+
   /** Daftar model yang tersedia di instance 9Router. */
-  async listModels(): Promise<string[]> {
+  async listModels(signal?: AbortSignal): Promise<string[]> {
     const { baseUrl, apiKey, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
     const endpoint = new URL('v1/models', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
     const response = await fetch(endpoint, {
       headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     })
     const raw = await response.text()
     if (!response.ok) throw new Error(errorMessage(raw, response.status))
@@ -187,6 +223,11 @@ export class NineRouterProvider {
   ): AsyncGenerator<StreamEvent, CompletionResult> {
     const { baseUrl, apiKey, model, reasoningEffort, timeoutMs = DEFAULT_TIMEOUT_MS } = this.options
     const endpoint = new URL('v1/chat/completions', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
+    let outboundMessages: WireMessage[]
+    try { outboundMessages = wireMessages(messages, this.options.home ?? homedir(), apiKey) } catch (error) {
+      if (error instanceof ProviderError) throw error
+      throw new ProviderError(error instanceof Error ? error.message : 'Attachment gambar tidak dapat dibaca.', { retryable: false })
+    }
 
     // Batas waktu dihitung sejak data terakhir, bukan sejak permintaan dimulai:
     // jawaban panjang yang terus mengalir tidak boleh diputus di tengah jalan.
@@ -214,7 +255,7 @@ export class NineRouterProvider {
         },
         body: JSON.stringify({
           model,
-          messages,
+          messages: outboundMessages,
           stream: true,
           ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
           ...(tools.length ? { tools, tool_choice: 'auto' } : {}),

@@ -15,9 +15,20 @@ test('tindakan disebut dengan bahasa manusia sesuai tool dan keberadaan berkas',
   assert.equal(describeRequest('write_file', { path: 'a.md' }, false).question, 'Buat a.md?')
   assert.equal(describeRequest('write_file', { path: 'a.md' }, true).title, 'Tulis ulang berkas')
   assert.equal(describeRequest('edit_file', { path: 'b.ts' }, true).title, 'Ubah berkas')
+  assert.equal(describeRequest('apply_patch', { patch: '...' }, true).title, 'Terapkan patch')
   assert.equal(describeRequest('bash', { command: 'ls' }, false).title, 'Jalankan perintah')
+  assert.equal(describeRequest('diagnostics', { kind: 'types' }, false).question, 'Jalankan diagnostics proyek (types)?')
+  assert.equal(describeRequest('lsp', { action: 'definition', path: 'src/app.ts' }, false).question, 'Jalankan LSP definition untuk src/app.ts?')
   assert.equal(describeRequest('write_file', { path: 'a.md' }, false).kind, 'edit')
   assert.equal(describeRequest('bash', { command: 'ls' }, false).kind, 'command')
+  const input = describeRequest('bash_input', { id: 'bg2', input: 'yes' }, false)
+  assert.equal(input.title, 'Kirim input ke proses')
+  assert.equal(input.kind, 'other')
+  assert.match(input.question, /bg2[\s\S]*"yes\\n"/)
+  const commit = describeRequest('git_commit', { message: 'feat: aman', paths: ['src/a.ts', 'tests/a.test.ts'] }, false)
+  assert.equal(commit.title, 'Buat commit Git')
+  assert.equal(commit.kind, 'other')
+  assert.match(commit.question, /feat: aman[\s\S]*src\/a\.ts[\s\S]*tests\/a\.test\.ts[\s\S]*staged lain tidak ikut/)
 })
 
 test('bahasa syntax highlighting diturunkan dari ekstensi berkas', () => {
@@ -78,7 +89,7 @@ test('panel diakhiri reset agar gaya tidak bocor', () => {
   }
 })
 
-test('panel undo: aksi per berkas, peringatan perubahan pengguna dan perintah bash', async () => {
+test('panel pemulihan: aksi per berkas, peringatan perubahan pengguna dan command', async () => {
   const { undoBody } = await import('../src/approval.ts')
   const rows = undoBody({
     checkpointId: 1,
@@ -92,5 +103,5 @@ test('panel undo: aksi per berkas, peringatan perubahan pengguna dan perintah ba
   assert.match(rows[0], /^↺ kembalikan {2}src\/app\.ts {2}\+1 -3$/)
   assert.match(rows[1], /diubah lagi setelah Boo/)
   assert.match(rows[2], /^✗ hapus {7}baru\.ts {5}\+0 -12$/)
-  assert.match(rows.at(-1)!, /bash .*tidak ikut dibatalkan/)
+  assert.match(rows.at(-1)!, /command .*tidak ikut dikembalikan/)
 })

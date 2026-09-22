@@ -20,6 +20,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import type { ServerEvent } from '../protocol.ts'
+import { MAX_IMAGE_BYTES, type ImageAttachment } from '@boo/core'
 import type { WebAssets } from './assets.ts'
 import { ControllerError, type WebController } from './controller.ts'
 
@@ -84,6 +85,30 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   } catch {
     throw new ControllerError('Badan permintaan bukan JSON yang sah.')
   }
+}
+
+async function readBinary(request: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length
+    if (size > MAX_IMAGE_BYTES) throw new ControllerError(`Gambar melebihi batas ${MAX_IMAGE_BYTES / 1024 / 1024} MiB.`, 413)
+    chunks.push(chunk as Buffer)
+  }
+  return Buffer.concat(chunks)
+}
+
+function attachments(value: unknown): ImageAttachment[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new ControllerError('Daftar attachment tidak sah.')
+  return value.map((entry) => {
+    if (!entry || typeof entry !== 'object') throw new ControllerError('Attachment tidak sah.')
+    const item = entry as Record<string, unknown>
+    if (typeof item.id !== 'string' || typeof item.name !== 'string' || typeof item.mediaType !== 'string' || typeof item.ref !== 'string' || typeof item.bytes !== 'number') {
+      throw new ControllerError('Attachment tidak sah.')
+    }
+    return item as unknown as ImageAttachment
+  })
 }
 
 function text(value: unknown): string {
@@ -186,8 +211,19 @@ export async function startWebServer({ controller, assets, port = 0, token = ran
       }
       case 'POST /api/submit': {
         const body = await readJson(request)
-        controller.submit(text(body.text))
+        controller.submit(text(body.text), attachments(body.attachments))
         json(response, 202, { ok: true })
+        return
+      }
+      case 'POST /api/attachments': {
+        const mediaType = request.headers['content-type'] ?? ''
+        const encodedName = request.headers['x-boo-filename']
+        let name = 'gambar'
+        if (typeof encodedName === 'string') {
+          try { name = decodeURIComponent(encodedName) } catch { throw new ControllerError('Nama attachment tidak sah.') }
+        }
+        const attachment = controller.uploadImage(name, mediaType, await readBinary(request))
+        json(response, 201, { attachment })
         return
       }
       case 'POST /api/cancel':
@@ -218,6 +254,25 @@ export async function startWebServer({ controller, assets, port = 0, token = ran
         const body = await readJson(request)
         controller.resumeSession(text(body.id))
         json(response, 200, { ok: true })
+        return
+      }
+      case 'POST /api/session/fork':
+        await readJson(request)
+        controller.forkSession()
+        json(response, 200, { ok: true })
+        return
+      case 'POST /api/session/rewind': {
+        const body = await readJson(request)
+        const turn = typeof body.turn === 'number' ? body.turn : undefined
+        // Pemilih interaktif masuk antrean normal agar tidak berlomba dengan task
+        // yang mungkin dikirim dari tab lain ketika pertanyaannya dijawab.
+        if (turn === undefined) {
+          controller.submit('/rewind')
+          json(response, 202, { ok: true })
+        } else {
+          await controller.rewindSession(turn)
+          json(response, 200, { ok: true })
+        }
         return
       }
       case 'GET /api/models':

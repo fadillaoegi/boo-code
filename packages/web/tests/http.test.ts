@@ -33,6 +33,22 @@ test('server web hanya melayani API bertoken dari origin lokal', async () => {
     const sessions = await fetch(`${server.url}api/sessions`, { headers: { Authorization: 'Bearer test-token' } })
     assert.equal(sessions.status, 200)
     assert.deepEqual(await sessions.json(), { sessions: [] })
+
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('web-image')])
+    const upload = await fetch(`${server.url}api/attachments`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer test-token', 'Content-Type': 'image/png', 'X-Boo-Filename': encodeURIComponent('error layar.png') },
+      body: png,
+    })
+    assert.equal(upload.status, 201)
+    const uploaded = await upload.json() as { attachment: { name: string; ref: string } }
+    assert.equal(uploaded.attachment.name, 'error layar.png')
+    assert.match(uploaded.attachment.ref, /^[a-z0-9-]+\/[a-f0-9]{64}\.png$/)
+
+    const fake = await fetch(`${server.url}api/attachments`, {
+      method: 'POST', headers: { Authorization: 'Bearer test-token', 'Content-Type': 'image/png' }, body: '<svg/>',
+    })
+    assert.equal(fake.status, 400)
   } finally {
     controller.close()
     await server.close()

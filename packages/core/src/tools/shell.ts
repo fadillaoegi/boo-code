@@ -17,6 +17,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
+import { sandboxLaunch, type SandboxPolicy, type SandboxStatus } from './sandbox.ts'
 
 /** Shell yang sintaks `-c`-nya kompatibel; fish dan nushell tidak termasuk. */
 const POSIX_SHELLS = new Set(['bash', 'zsh', 'sh', 'dash', 'ksh'])
@@ -140,17 +141,31 @@ export interface StartOptions {
   cwd: string
   onOutput?: (chunk: string) => void
   shell?: Shell
+  sandbox?: SandboxPolicy
+  /** LSP dan protocol server membutuhkan stdin dua arah; command biasa tetap ditutup. */
+  stdin?: 'ignore' | 'pipe'
+}
+
+const sandboxByChild = new WeakMap<ChildProcess, SandboxStatus>()
+
+/** Environment agent shell tidak mewarisi credential proses Boo. */
+export function commandEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const blocked = /(?:^|_)(?:API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:$|_)/i
+  const exact = new Set(['NINEROUTER_KEY', 'DATABASE_URL', 'SSH_AUTH_SOCK', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'])
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !exact.has(key) && !blocked.test(key)))
 }
 
 /** Memulai perintah. Masukan standar ditutup, jadi perintah yang bertanya tidak menggantung. */
-export function startCommand(command: string, { cwd, onOutput, shell = resolveShell() }: StartOptions): ChildProcess {
-  const child = spawn(shell.file, shell.args(command), {
+export function startCommand(command: string, { cwd, onOutput, shell = resolveShell(), sandbox = { mode: 'workspace-write' }, stdin = 'ignore' }: StartOptions): ChildProcess {
+  const launch = sandboxLaunch(shell, command, cwd, sandbox)
+  const child = spawn(launch.file, launch.args, {
     cwd,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [stdin, 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
-    windowsVerbatimArguments: process.platform === 'win32',
-    env: { ...process.env, TERM: 'dumb', NO_COLOR: '1', FORCE_COLOR: '0' },
+    windowsVerbatimArguments: process.platform === 'win32' && launch.status.backend === 'none',
+    env: { ...commandEnvironment(), TERM: 'dumb', NO_COLOR: '1', FORCE_COLOR: '0' },
   })
+  sandboxByChild.set(child, launch.status)
   installExitHook()
   live.add(child)
   child.once('exit', () => live.delete(child))
@@ -171,6 +186,7 @@ export interface CommandResult {
   cancelled: boolean
   /** Shell gagal dijalankan sama sekali. */
   spawnError?: string
+  sandbox: SandboxStatus
 }
 
 export interface RunOptions extends StartOptions {
@@ -185,7 +201,8 @@ export function runCommand(command: string, options: RunOptions): Promise<Comman
 
   return new Promise((resolve) => {
     if (signal?.aborted) {
-      resolve({ output: '', exitCode: null, timedOut: false, cancelled: true })
+      const sandbox = sandboxLaunch(options.shell ?? resolveShell(), command, options.cwd, options.sandbox ?? { mode: 'workspace-write' }).status
+      resolve({ output: '', exitCode: null, timedOut: false, cancelled: true, sandbox })
       return
     }
     const child = startCommand(command, {
@@ -195,6 +212,7 @@ export function runCommand(command: string, options: RunOptions): Promise<Comman
         onOutput?.(chunk)
       },
     })
+    const sandbox = sandboxByChild.get(child) ?? sandboxLaunch(options.shell ?? resolveShell(), command, options.cwd, options.sandbox ?? { mode: 'workspace-write' }).status
 
     let timedOut = false
     let cancelled = false
@@ -208,10 +226,10 @@ export function runCommand(command: string, options: RunOptions): Promise<Comman
     }
     signal?.addEventListener('abort', onAbort, { once: true })
 
-    const finish = (result: Omit<CommandResult, 'output' | 'timedOut' | 'cancelled'>) => {
+    const finish = (result: Omit<CommandResult, 'output' | 'timedOut' | 'cancelled' | 'sandbox'>) => {
       clearTimeout(timer)
       signal?.removeEventListener('abort', onAbort)
-      resolve({ output: buffer.toString(), timedOut, cancelled, ...result })
+      resolve({ output: buffer.toString(), timedOut, cancelled, sandbox, ...result })
     }
     child.once('error', (error) => finish({ exitCode: null, spawnError: error.message }))
     // 'close', bukan 'exit': keluaran yang masih di pipa harus terbaca seluruhnya.

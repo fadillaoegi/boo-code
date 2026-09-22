@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "name": "Boo coding smoke test",
+  "description": "Pemeriksaan cepat satu bug sebelum menjalankan benchmark penuh.",
+  "model": "auto",
+  "cases": [
+    {
+      "id": "fix-add",
+      "prompt": "Perbaiki implementasi add agar seluruh test lulus. Jangan ubah test.",
+      "fixture": "fixtures/fix-add",
+      "tags": ["debugging", "javascript", "smoke"],
+      "difficulty": "standard",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          {
+            "path": "app.js",
+            "contains": "return a + b",
+            "notContains": "return a - b"
+          },
+          {
+            "path": "app.test.js",
+            "sha256": "90def2748f49692a604e6b3ef99bb471bbfac4629df6c5dc281b795a1fc04247"
+          }
+        ],
+        "requiredTools": ["edit_file", "bash"],
+        "forbiddenTools": ["write_file"],
+        "requireVerification": true,
+        "maxTurns": 8,
+        "maxToolCalls": 10
+      }
+    }
+  ]
+}

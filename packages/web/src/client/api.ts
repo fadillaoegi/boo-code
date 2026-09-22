@@ -6,7 +6,7 @@
  * dibagikan dan tidak tersimpan di riwayat browser.
  */
 
-import type { ServerEvent } from '../protocol.ts'
+import type { ImageAttachment, ServerEvent } from '../protocol.ts'
 
 const STORAGE_KEY = 'boo-code-token'
 
@@ -55,6 +55,19 @@ export class Api {
   async post<T = { ok: true }>(path: string, body: unknown = {}): Promise<T> {
     const response = await fetch(path, { method: 'POST', headers: this.headers(true), body: JSON.stringify(body) })
     return this.parse<T>(response)
+  }
+
+  async uploadImage(file: File): Promise<ImageAttachment> {
+    const response = await fetch('/api/attachments', {
+      method: 'POST',
+      headers: {
+        ...this.headers(false),
+        'Content-Type': file.type || 'application/octet-stream',
+        'X-Boo-Filename': encodeURIComponent(file.name),
+      },
+      body: file,
+    })
+    return (await this.parse<{ attachment: ImageAttachment }>(response)).attachment
   }
 
   private async parse<T>(response: Response): Promise<T> {

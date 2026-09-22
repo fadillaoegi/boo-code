@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { estimateMessageTokens, trimToBudget } from '../src/agent/context.ts'
-import type { Message } from '../src/domain/message.ts'
+import { contextRelevanceTerms, estimateMessageTokens, estimateToolSchemaTokens, inspectContext, messageContextBudget, trimToBudget } from '../src/agent/context.ts'
+import type { Message, ToolSchema } from '../src/domain/message.ts'
 
 const system: Message = { role: 'system', content: 'Kamu adalah Boo.' }
 
@@ -136,4 +136,104 @@ test('token pada tool_calls ikut dihitung', () => {
   const plain = estimateMessageTokens({ role: 'assistant', content: 'hai' })
   const withCall = estimateMessageTokens(assistantCall('call_1', 'sangat/panjang/sekali/path.ts'))
   assert.ok(withCall > plain)
+})
+
+test('context inspector menghitung skema tool, gambar, reasoning, dan metadata compaction', () => {
+  const schemas: ToolSchema[] = [{
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: 'Membaca file dengan aman.',
+      parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    },
+  }]
+  const messages: Message[] = [
+    system,
+    { role: 'user', content: 'lihat ini', images: [{ id: '1', name: 'a.png', mediaType: 'image/png', ref: 'a', bytes: 10 }] },
+    { role: 'assistant', content: 'baik', reasoning_content: 'rencana internal yang cukup panjang' },
+  ]
+  const report = inspectContext(messages, schemas, 10_000, { historyMessages: 12, summarizedMessages: 7 })
+  const total = Object.values(report.breakdown).reduce((sum, value) => sum + value, 0)
+
+  assert.equal(report.currentTokens, total)
+  assert.equal(report.breakdown.images, 1_200)
+  assert.ok(report.breakdown.assistant > estimateMessageTokens({ role: 'assistant', content: 'baik' }))
+  assert.equal(report.breakdown.toolSchemas, estimateToolSchemaTokens(schemas))
+  assert.equal(report.historyMessages, 12)
+  assert.equal(report.summarizedMessages, 7)
+  assert.equal(report.compactionActive, true)
+})
+
+test('skema tool disisihkan dari budget dan inspector melaporkan trimming kritis', () => {
+  const schemas: ToolSchema[] = [{
+    type: 'function',
+    function: {
+      name: 'large_tool',
+      description: 'x'.repeat(2_000),
+      parameters: { type: 'object', properties: {} },
+    },
+  }]
+  const limit = 1_000
+  const messages = [system, user('lama '.repeat(1_000)), user('permintaan terbaru')]
+  const available = messageContextBudget(limit, schemas)
+  const report = inspectContext(messages, schemas, limit)
+
+  assert.equal(available, limit - estimateToolSchemaTokens(schemas))
+  assert.ok(report.droppedMessages > 0)
+  assert.equal(report.pressure, 'critical')
+  assert.ok(report.sentTokens <= limit)
+  assert.equal(report.sentMessages, 2)
+})
+
+test('reasoning content ikut dipotong ketika satu blok melebihi budget', () => {
+  const messages: Message[] = [system, { role: 'assistant', content: 'jawaban', reasoning_content: 'r'.repeat(40_000) }]
+  const result = trimToBudget(messages, 500)
+  assert.ok(result.messages.at(-1)?.reasoning_content?.includes('dipotong'))
+  assert.ok(result.estimatedTokens <= 500)
+})
+
+test('token relevansi mempertahankan path dan identifier tetapi membuang kata umum', () => {
+  const terms = contextRelevanceTerms('Tolong lanjut implementasi parser checkout di src/cart/checkout_parser.ts untuk error ini')
+  assert.ok(terms.includes('src/cart/checkout_parser.ts'))
+  assert.ok(terms.includes('checkout'))
+  assert.ok(terms.includes('parser'))
+  assert.equal(terms.includes('untuk'), false)
+  assert.equal(terms.includes('error'), false)
+})
+
+test('pemangkasan relevansi menyelamatkan bukti lama beserta pasangan tool-nya', () => {
+  const noise = (label: string): Message => ({ role: 'assistant', content: `${label} ${'netral '.repeat(42)}` })
+  const messages: Message[] = [
+    system,
+    user('perbaiki checkout parser'),
+    assistantCall('relevant', 'src/cart/checkout_parser.ts'),
+    toolResult('relevant', `CheckoutParser parseCart calculate_total ${'bukti '.repeat(35)}`),
+    noise('noise-1'), noise('noise-2'), noise('noise-3'), noise('noise-4'),
+    { role: 'assistant', content: 'langkah terbaru' },
+  ]
+  const result = trimToBudget(messages, 330, { focus: 'perbaiki CheckoutParser di src/cart/checkout_parser.ts' })
+
+  assert.ok(result.droppedMessages > 0)
+  assert.ok(result.prioritizedMessages > 0)
+  const caller = result.messages.find((message) => message.role === 'assistant' && message.tool_calls?.some((call) => call.id === 'relevant'))
+  const evidence = result.messages.find((message) => message.role === 'tool' && message.tool_call_id === 'relevant')
+  assert.ok(caller, 'assistant tool call relevan dipertahankan')
+  assert.ok(evidence, 'hasil tool relevan dipertahankan sebagai satu blok')
+  assert.equal(result.messages.at(-1)?.content, 'langkah terbaru')
+  assert.ok(result.estimatedTokens <= 330)
+})
+
+test('seluruh system prompt berurutan dipertahankan saat seleksi relevansi aktif', () => {
+  const messages: Message[] = [
+    system,
+    { role: 'system', content: 'aturan proyek penting' },
+    { role: 'system', content: 'pengingat verifikasi penting' },
+    user(`lama ${'x'.repeat(2_000)}`),
+    user('perbaiki auth middleware'),
+  ]
+  const result = trimToBudget(messages, 180, { focus: 'auth middleware' })
+  assert.deepEqual(result.messages.slice(0, 3).map((message) => message.content), [
+    'Kamu adalah Boo.', 'aturan proyek penting', 'pengingat verifikasi penting',
+  ])
+  assert.equal(result.messages.at(-1)?.content, 'perbaiki auth middleware')
 })

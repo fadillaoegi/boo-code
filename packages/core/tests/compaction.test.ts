@@ -5,6 +5,8 @@ import { alignCut, applyCompaction, chooseCut, renderForSummary, SUMMARY_HEADER,
 import type { Message } from '../src/domain/message.ts'
 import type { NineRouterProvider } from '../src/provider/nineRouter.ts'
 import { createDefaultRegistry } from '../src/tools/index.ts'
+import { BOO_SYSTEM_PROMPT } from '../src/agent/prompt.ts'
+import { estimateMessageTokens, estimateToolSchemaTokens } from '../src/agent/context.ts'
 
 const big = (label: string) => `${label} ${'x'.repeat(4_000)}`
 
@@ -77,12 +79,16 @@ test('konteks hampir penuh: bagian lama diringkas, riwayat lengkap tetap utuh', 
   const { fake, chats, summaries } = provider()
   const saved: Compaction[] = []
   const history = [...exchange(big('pertanyaan pertama'), 'jawaban pertama'), ...exchange(big('pertanyaan kedua'), 'jawaban kedua')]
+  const registry = createDefaultRegistry()
+  // Sisakan ruang tetap di luar system prompt dan skema tool agar penambahan
+  // instruksi/tool tidak mengubah bagian riwayat yang diuji fixture ini.
+  const budget = Math.max(3_000, estimateMessageTokens({ role: 'system', content: BOO_SYSTEM_PROMPT }) + estimateToolSchemaTokens(registry.schemas()) + 1_400)
   const agent = new Agent({
     provider: fake,
-    registry: createDefaultRegistry(),
+    registry,
     workspace: '/tmp',
     askPermission: async () => true,
-    maxContextTokens: 3_000,
+    maxContextTokens: budget,
     history,
     onCompaction: (compaction) => saved.push(compaction),
   })

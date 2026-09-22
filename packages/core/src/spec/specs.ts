@@ -19,6 +19,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { referencedPromptTitle } from '../agent/references.ts'
 
 export const SPECS_DIRECTORY = '.boo/specs'
 
@@ -257,6 +258,7 @@ Setelah berkas diperbarui, ringkas apa yang berubah.`
 
 /** Baris pertama permintaan spec, tanpa penanda — untuk ditampilkan. */
 export function specPromptTitle(content: string): string | null {
-  if (!content.startsWith(SPEC_PROMPT_MARK)) return null
-  return content.slice(SPEC_PROMPT_MARK.length).split('\n')[0]
+  const visible = referencedPromptTitle(content) ?? content
+  if (!visible.startsWith(SPEC_PROMPT_MARK)) return null
+  return visible.slice(SPEC_PROMPT_MARK.length).split('\n')[0]
 }

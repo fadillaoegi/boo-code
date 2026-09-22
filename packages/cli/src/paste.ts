@@ -13,6 +13,50 @@ export const DISABLE_BRACKETED_PASTE = `${String.fromCharCode(27)}[?2004l`
 
 const PLACEHOLDER = /\[Tempelan #(\d+) · \d+ baris\]/g
 
+/** Bentuk minimal event `keypress` dari Node yang diperlukan oleh input editor. */
+export type Keypress = {
+  name?: string
+  sequence?: string
+  meta?: boolean
+  shift?: boolean
+}
+
+/**
+ * Mengidentifikasi Shift+Enter dari terminal yang berbeda-beda.
+ *
+ * Terminal yang sudah memakai kitty keyboard protocol mengirim `CSI 13;2u`.
+ * Sebagian terminal lama mengirim Esc lalu Return (yang Node tandai sebagai
+ * Meta+Return), sedangkan Node sendiri memberi `shift: true` untuk beberapa
+ * variasi lain. Semua bentuk itu berarti "lanjutkan di baris berikutnya".
+ */
+export function isShiftEnter(key: Keypress): boolean {
+  const nameIsEnter = key.name === 'return' || key.name === 'enter'
+  if (nameIsEnter && (key.shift || key.meta)) return true
+  return key.sequence === '\u001b[13;2u' || key.sequence === '\u001b[13;2~' || key.sequence === '\u001b[27;2;13~'
+}
+
+/**
+ * Menyimpan bagian prompt yang dibuat dengan Shift+Enter.
+ * `submit` baru mengembalikan nilai ketika Enter biasa ditekan.
+ */
+export class MultilineInput {
+  private readonly lines: string[] = []
+
+  continue(line: string): void {
+    this.lines.push(line)
+  }
+
+  submit(line: string): string {
+    const value = [...this.lines, line].join('\n')
+    this.lines.length = 0
+    return value
+  }
+
+  clear(): void {
+    this.lines.length = 0
+  }
+}
+
 /** Terminal mengirim baris baru tempelan sebagai CR; disamakan menjadi LF. */
 export function normalizePaste(raw: string): string {
   return raw.replace(/\r\n?/g, '\n').replace(/\n+$/, '')

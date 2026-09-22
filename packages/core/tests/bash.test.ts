@@ -7,7 +7,8 @@ import { Agent, type AgentEvent } from '../src/agent/loop.ts'
 import type { Message, ToolCall } from '../src/domain/message.ts'
 import type { NineRouterProvider } from '../src/provider/nineRouter.ts'
 import { bashTool } from '../src/tools/bash.ts'
-import { bashKillTool, bashOutputTool } from '../src/tools/bashOutput.ts'
+import { bashInputTool, bashKillTool, bashOutputTool, MAX_BACKGROUND_INPUT_CHARACTERS } from '../src/tools/bashOutput.ts'
+import { backgroundProcesses } from '../src/tools/background.ts'
 import { createDefaultRegistry } from '../src/tools/index.ts'
 import { cleanOutput, OutputBuffer, resolveShell } from '../src/tools/shell.ts'
 
@@ -27,9 +28,9 @@ function alive(pid: number): boolean {
   }
 }
 
-async function waitFor(check: () => boolean, ms = 3_000): Promise<void> {
+async function waitFor(check: () => boolean | Promise<boolean>, ms = 3_000): Promise<void> {
   const until = Date.now() + ms
-  while (!check()) {
+  while (!await check()) {
     if (Date.now() > until) throw new Error('kondisi tidak tercapai')
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
@@ -129,6 +130,48 @@ test('latar belakang: langsung kembali, keluaran dibaca bertahap, lalu dihentika
   const unknown = await bashOutputTool.run({ id: 'bg999' }, { workspace })
   assert.equal(unknown.isError, true)
   assert.match(unknown.content, new RegExp(id))
+})
+
+test('proses latar belakang interaktif menerima input bertahap dan dapat menutup stdin', async () => {
+  const script = "process.stdin.setEncoding('utf8');let data='';process.stdin.on('data',chunk=>{data+=chunk;let end;while((end=data.indexOf('\\n'))>=0){const line=data.slice(0,end);data=data.slice(end+1);console.log('terima:'+line)}});process.stdin.on('end',()=>{console.log('stdin:tutup')})"
+  const start = await bash(`node -e ${JSON.stringify(script)}`, { run_in_background: true, interactive: true })
+  const id = /id (bg\d+)/.exec(start.content)?.[1]
+  assert.ok(id, start.content)
+  assert.match(start.content, /bash_input/)
+
+  try {
+    const sent = await bashInputTool.run({ id, input: 'halo' }, { workspace })
+    assert.equal(sent.isError, undefined)
+    assert.match(sent.content, /5 karakter dikirim/)
+
+    let observed = ''
+    await waitFor(async () => {
+      observed += (await bashOutputTool.run({ id }, { workspace })).content
+      return observed.includes('terima:halo')
+    })
+
+    const closed = await bashInputTool.run({ id, input: '', append_newline: false, close_stdin: true }, { workspace })
+    assert.equal(closed.isError, undefined)
+    await waitFor(() => backgroundProcesses.list().find((item) => item.id === id)?.status === 'exited')
+    assert.match((await bashOutputTool.run({ id }, { workspace })).content, /stdin:tutup/)
+  } finally {
+    backgroundProcesses.kill(id)
+  }
+})
+
+test('bash_input hanya menerima proses interaktif dan input teks terbatas', async () => {
+  const normal = await bash('sleep 30', { run_in_background: true })
+  const id = /id (bg\d+)/.exec(normal.content)?.[1]
+  assert.ok(id)
+  try {
+    assert.equal((await bashInputTool.run({ id, input: 'y' }, { workspace })).isError, true)
+    assert.equal((await bashInputTool.run({ id: 'salah', input: 'y' }, { workspace })).isError, true)
+    assert.equal((await bashInputTool.run({ id, input: 'x'.repeat(MAX_BACKGROUND_INPUT_CHARACTERS + 1) }, { workspace })).isError, true)
+    assert.equal((await bashInputTool.run({ id, input: '\u0000' }, { workspace })).isError, true)
+  } finally {
+    backgroundProcesses.kill(id)
+  }
+  assert.equal((await bash('echo tidak', { interactive: true })).isError, true)
 })
 
 test('agent meneruskan keluaran tool sebagai event sebelum tool selesai', async () => {

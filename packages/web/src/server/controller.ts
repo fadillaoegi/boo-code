@@ -10,6 +10,8 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import {
   acceptedEffort,
+  aggregateLocalTraces,
+  automaticReviewEnabled,
   Agent,
   backgroundProcesses,
   condense,
@@ -17,37 +19,72 @@ import {
   describeSelection,
   designPrompt,
   diffStats,
+  evaluatePermission,
+  expandPromptCommand,
   FEATURED_FAMILIES,
   findSelection,
+  formatTaskStatus,
   groupModels,
+  imageDataUrl,
   INIT_PROMPT,
+  inspectSandbox,
+  type ModelMode,
   listSpecs,
+  findApp,
+  launchApp,
+  loadApps,
   loadInstructions,
+  loadSkills,
+  loadPromptCommands,
+  loadHooks,
+  loadPermissionPolicy,
+  storeImageData,
+  validateImages,
+  latestInterruptedRun,
+  latestPlan,
+  latestTodos,
+  LocalRunTrace,
+  PersistentRunJournal,
   NineRouterProvider,
   nextTask,
   readSpec,
   requirementsPrompt,
+  reviewRequest,
+  implementPlanRequest,
+  planRequest,
+  permissionRuleLabel,
   resolveInWorkspace,
+  resolveConfiguredPermission,
+  resolveShell,
+  resolveSandboxPolicy,
   revisePrompt,
   specPromptTitle,
   SPECS_DIRECTORY,
   taskPrompt,
   tasksPrompt,
   uniqueSpecName,
+  runCommand,
+  traceAgentEvents,
+  journalAgentEvents,
+  runRecoveryPrompt,
+  tracingEnabled,
   type AgentEvent,
   type Compaction,
   type DiffLine,
+  type ImageAttachment,
   type Message,
   type PermissionDecision,
   type ProviderOptions,
   type SpecDocument,
   type SpecTask,
+  type UserAnswer,
+  type UserQuestion,
 } from '@boo/core'
 import type { BooKey } from '@boo/core/config/config.ts'
 import { describeRequest, languageOf } from '@boo/core/presentation/approval.ts'
 import { buildTranscript } from '@boo/core/presentation/transcript.ts'
 import type { ViewItem } from '@boo/core/presentation/view.ts'
-import { listSessions, loadSession, SessionRecorder } from '@boo/core/session/sessions.ts'
+import { forkSession as forkStoredSession, forkSessionAt, listSessions, loadSession, sessionTurns, SessionRecorder, shortId } from '@boo/core/session/sessions.ts'
 import type {
   DiffRow,
   ModelFamilyView,
@@ -95,9 +132,13 @@ interface Job {
   display: string
   prompt: string
   kind: 'send' | 'compact'
+  mode?: 'normal' | 'review' | 'plan'
   /** Dijalankan hanya bila permintaan selesai normal. */
   after?: () => Promise<void>
+  images?: ImageAttachment[]
 }
+
+interface QueuedInput { text: string; images: ImageAttachment[] }
 
 interface PendingQuestion {
   view: QuestionView
@@ -110,6 +151,7 @@ export class WebController {
   private readonly options: ControllerOptions
   private readonly workspace: string
   private readonly provider: NineRouterProvider
+  private modelMode: ModelMode
   private recorder: SessionRecorder
   private agent: Agent
   private items: ViewItem[] = []
@@ -117,7 +159,7 @@ export class WebController {
   private busy = false
   private abort: AbortController | null = null
   private presenter: RequestPresenter | null = null
-  private readonly queue: string[] = []
+  private readonly queue: QueuedInput[] = []
   private internal: Job | null = null
   private status: StatusView | null = null
   private question: PendingQuestion | null = null
@@ -129,12 +171,14 @@ export class WebController {
   constructor(options: ControllerOptions) {
     this.options = options
     this.workspace = options.workspace
-    const model = options.config.BOO_MODEL || DEFAULT_MODEL
+    this.modelMode = options.config.BOO_MODEL && options.config.BOO_MODEL !== 'auto' ? 'manual' : 'auto'
+    const model = this.modelMode === 'auto' ? DEFAULT_MODEL : options.config.BOO_MODEL || DEFAULT_MODEL
     const providerOptions: ProviderOptions = {
       baseUrl: options.config.NINEROUTER_URL || DEFAULT_BASE_URL,
       apiKey: options.config.NINEROUTER_KEY ?? '',
       model,
-      reasoningEffort: acceptedEffort(model, options.config.BOO_EFFORT),
+      reasoningEffort: this.modelMode === 'auto' ? undefined : acceptedEffort(model, options.config.BOO_EFFORT),
+      home: options.home ?? homedir(),
     }
     this.provider = options.createProvider?.(providerOptions) ?? new NineRouterProvider(providerOptions)
     this.recorder = this.newRecorder()
@@ -158,10 +202,11 @@ export class WebController {
       items: this.items,
       omittedExchanges: this.omittedExchanges,
       busy: this.busy,
-      queue: [...this.queue],
+      queue: this.queue.map((item) => item.text),
       status: this.status,
       question: this.question?.view ?? null,
       instructions: this.agent.instructions.map((file) => file.label),
+      commands: loadPromptCommands({ workspace: this.workspace, home: this.options.home ?? homedir() }).map(({ name, description, source }) => ({ name, description, source })),
     }
   }
 
@@ -214,7 +259,7 @@ export class WebController {
   }
 
   private emitQueue(): void {
-    this.emit({ type: 'queue', queue: [...this.queue] })
+    this.emit({ type: 'queue', queue: this.queue.map((item) => item.text) })
   }
 
   /* ------------------------------------------------------------ agent dan sesi */
@@ -223,6 +268,7 @@ export class WebController {
     return new SessionRecorder({
       workspace: this.workspace,
       model: this.provider.model,
+      modelMode: this.modelMode,
       ...(this.provider.reasoningEffort ? { reasoningEffort: this.provider.reasoningEffort } : {}),
       ...(resumeId ? { resumeId } : {}),
     })
@@ -230,11 +276,21 @@ export class WebController {
 
   private createAgent(history?: Message[], compaction?: Compaction): Agent {
     const recorder = () => this.recorder
+    const home = this.options.home ?? homedir()
+    const recovery = history ? latestInterruptedRun(home, this.workspace, this.recorder.id) : null
     return new Agent({
       provider: this.provider,
+      modelMode: this.modelMode,
       registry: createDefaultRegistry(),
       workspace: this.workspace,
-      instructions: () => loadInstructions({ workspace: this.workspace, home: this.options.home ?? homedir() }),
+      home,
+      autoReview: automaticReviewEnabled(this.options.config.BOO_AUTO_REVIEW),
+      sessionId: this.recorder.id,
+      ...(recovery ? { recoveryPrompt: runRecoveryPrompt(recovery, latestTodos(history ?? []), history ?? []) } : {}),
+      sandbox: resolveSandboxPolicy(this.options.config.BOO_SANDBOX, this.options.config.BOO_NETWORK_ACCESS),
+      instructions: (targets) => loadInstructions({ workspace: this.workspace, home: this.options.home ?? homedir(), targets }),
+      skills: () => loadSkills({ workspace: this.workspace, home: this.options.home ?? homedir() }),
+      hooks: () => loadHooks(this.workspace, this.options.home ?? homedir()),
       ...(Number(this.options.config.BOO_MAX_TURNS) > 0 ? { maxTurns: Number(this.options.config.BOO_MAX_TURNS) } : {}),
       ...(this.options.config.BOO_MAX_CONTEXT_TOKENS ? { maxContextTokens: Number(this.options.config.BOO_MAX_CONTEXT_TOKENS) } : {}),
       ...(this.options.retryDelaysMs ? { retryDelaysMs: this.options.retryDelaysMs } : {}),
@@ -242,6 +298,7 @@ export class WebController {
       ...(compaction ? { compaction } : {}),
       onMessage: (message) => recorder().recordMessage(message),
       onCompaction: (summary) => recorder().recordCompaction(summary),
+      askUser: (question) => this.askUser(question),
       askPermission: (request) => this.askPermission(request),
       onTurnLimit: (turns) => this.askTurnLimit(turns),
     })
@@ -285,6 +342,7 @@ export class WebController {
       this.provider.model = session.model
       this.provider.reasoningEffort = acceptedEffort(session.model, session.reasoningEffort)
     }
+    this.modelMode = session.modelMode ?? 'manual'
     this.recorder = this.newRecorder(session.id)
     this.agent = this.createAgent(session.messages, session.compaction)
     const exchanges = buildTranscript(session.messages)
@@ -298,16 +356,139 @@ export class WebController {
     if (restored?.filledToolResults || restored?.filledReplies) {
       this.items.push({ kind: 'notice', id: this.nextId(), variant: 'info', text: 'Sesi sebelumnya berhenti mendadak; bagian yang terputus sudah ditandai.' })
     }
+    const interrupted = latestInterruptedRun(this.options.home ?? homedir(), this.workspace, session.id)
+    if (interrupted) {
+      const details = [
+        interrupted.activeTools.length ? `${interrupted.activeTools.length} tool belum pasti` : '',
+        interrupted.checkpoint?.files.length ? `${interrupted.checkpoint.files.length} file terdampak` : '',
+        interrupted.verificationNeeded ? 'verifikasi tertunda' : '',
+      ].filter(Boolean)
+      this.items.push({ kind: 'notice', id: this.nextId(), variant: 'info', text: `Run sebelumnya terputus pada langkah ${Math.max(1, interrupted.lastTurn + 1)}${details.length ? ` · ${details.join(' · ')}` : ''}. Boo akan memeriksa keadaan workspace sebelum melanjutkan.` })
+    }
+    this.emit({ type: 'snapshot', snapshot: this.snapshot() })
+  }
+
+  forkSession(): void {
+    this.requireIdle()
+    if (!this.recorder.started) throw new ControllerError('Belum ada percakapan untuk dicabangkan. Kirim satu pesan terlebih dahulu.')
+    const sourceId = this.recorder.id
+    let session
+    try {
+      session = forkStoredSession(sourceId)
+    } catch (error) {
+      throw new ControllerError(error instanceof Error ? error.message : 'Sesi tidak dapat dicabangkan.')
+    }
+    if (session.workspace !== this.workspace) throw new ControllerError('Sesi itu milik direktori lain.', 403)
+
+    this.dismissQuestion()
+    this.modelMode = session.modelMode ?? 'manual'
+    if (session.model) {
+      this.provider.model = session.model
+      this.provider.reasoningEffort = acceptedEffort(session.model, session.reasoningEffort)
+    }
+    this.recorder = this.newRecorder(session.id)
+    this.agent = this.createAgent(session.messages, session.compaction)
+    const exchanges = buildTranscript(session.messages)
+    const shown = exchanges.slice(-MAX_REPLAYED_EXCHANGES)
+    this.omittedExchanges = exchanges.length - shown.length
+    this.items = shown.flat()
+    this.queue.length = 0
+    this.internal = null
+    this.sessionApprovals.clear()
+    this.items.push({
+      kind: 'notice',
+      id: this.nextId(),
+      variant: 'info',
+      text: `Cabang ${shortId(session.id)} dibuat dari ${shortId(sourceId)}. Konteks percakapan disalin; file workspace tetap dipakai bersama dan riwayat /undo dimulai baru.`,
+    })
+    this.emit({ type: 'snapshot', snapshot: this.snapshot() })
+  }
+
+  /** Membuat cabang baru dari keadaan tepat sebelum prompt yang dipilih. */
+  async rewindSession(requestedTurn?: number): Promise<void> {
+    this.requireIdle()
+    if (!this.recorder.started) throw new ControllerError('Belum ada percakapan untuk diputar balik. Kirim satu pesan terlebih dahulu.')
+    const sourceId = this.recorder.id
+    let source
+    try {
+      source = loadSession(sourceId)
+    } catch (error) {
+      throw new ControllerError(error instanceof Error ? error.message : 'Sesi tidak dapat dimuat.')
+    }
+    const turns = sessionTurns(source.messages)
+    if (!turns.length) throw new ControllerError('Sesi ini belum memiliki prompt yang dapat dipilih.')
+
+    let selected = requestedTurn === undefined
+      ? undefined
+      : turns.find((turn) => turn.number === requestedTurn)
+    if (requestedTurn !== undefined && (!Number.isInteger(requestedTurn) || !selected)) {
+      throw new ControllerError(`Prompt #${requestedTurn} tidak ditemukan. Pilih nomor 1 sampai ${turns.at(-1)?.number}.`)
+    }
+    if (!selected) {
+      // Daftar dibatasi untuk menjaga kartu tetap ringan. Prompt lama tetap bisa
+      // dipilih secara eksplisit dengan `/rewind <nomor>`.
+      const recent = turns.slice(-20).reverse()
+      const answer = await this.ask({
+        title: 'Putar balik percakapan',
+        subject: recent.length < turns.length ? `20 prompt terbaru dari ${turns.length}` : `${turns.length} prompt`,
+        prompt: 'Buat cabang baru dari keadaan sebelum prompt mana?',
+        body: { type: 'text', text: 'Sesi asal tetap utuh. File workspace tidak diubah dan riwayat /undo cabang dimulai baru.' },
+        options: [
+          ...recent.map((turn, index) => ({
+            id: `turn-${turn.number}`,
+            label: `#${turn.number} · ${turn.title}`,
+            ...(index === 0 ? { tone: 'primary' as const } : {}),
+          })),
+          { id: 'cancel', label: 'Batal' },
+        ],
+      })
+      if (answer.optionId === 'dismiss' || answer.optionId === 'cancel') return
+      const number = Number(answer.optionId.slice('turn-'.length))
+      selected = turns.find((turn) => turn.number === number)
+      if (!selected) throw new ControllerError('Titik rewind tidak lagi berlaku.', 409)
+    }
+
+    let session
+    try {
+      session = forkSessionAt(sourceId, selected.messageIndex)
+    } catch (error) {
+      throw new ControllerError(error instanceof Error ? error.message : 'Sesi tidak dapat diputar balik.')
+    }
+    if (session.workspace !== this.workspace) throw new ControllerError('Sesi itu milik direktori lain.', 403)
+
+    this.dismissQuestion()
+    this.modelMode = session.modelMode ?? 'manual'
+    if (session.model) {
+      this.provider.model = session.model
+      this.provider.reasoningEffort = acceptedEffort(session.model, session.reasoningEffort)
+    }
+    this.recorder = this.newRecorder(session.id)
+    this.agent = this.createAgent(session.messages, session.compaction)
+    const exchanges = buildTranscript(session.messages)
+    const shown = exchanges.slice(-MAX_REPLAYED_EXCHANGES)
+    this.omittedExchanges = exchanges.length - shown.length
+    this.items = shown.flat()
+    this.queue.length = 0
+    this.internal = null
+    this.sessionApprovals.clear()
+    this.items.push({
+      kind: 'notice',
+      id: this.nextId(),
+      variant: 'info',
+      text: `Cabang ${shortId(session.id)} dibuat sebelum prompt #${selected.number}. Sesi asal ${shortId(sourceId)} tetap utuh. File workspace tidak diubah dan riwayat /undo dimulai baru.`,
+    })
     this.emit({ type: 'snapshot', snapshot: this.snapshot() })
   }
 
   /* ------------------------------------------------------------ model */
 
   private modelView(): ModelView {
+    const label = describeSelection(groupModels([this.provider.model]), this.provider.model, this.provider.reasoningEffort)
     return {
+      mode: this.modelMode,
       id: this.provider.model,
       effort: this.provider.reasoningEffort ?? null,
-      label: describeSelection(groupModels([this.provider.model]), this.provider.model, this.provider.reasoningEffort),
+      label: this.modelMode === 'auto' ? `Auto · ${this.agent.lastAutoSelection ? label : 'menunggu tugas'}` : `Manual · ${label}`,
     }
   }
 
@@ -334,15 +515,27 @@ export class WebController {
           label: option.label,
           modelId: option.modelId,
           effort: option.reasoningEffort ?? null,
-          current: current?.option === option,
+          current: this.modelMode === 'manual' && current?.option === option,
         })),
       }))
   }
 
   setModel(modelId: string, effort: string | null): void {
+    this.requireIdle()
     if (!modelId) throw new ControllerError('Model wajib diisi.')
+    if (modelId === 'auto') {
+      if (effort) throw new ControllerError('Auto menentukan tingkat penalaran sendiri.')
+      this.modelMode = 'auto'
+      this.agent.setModelMode(this.modelMode)
+      this.recorder.recordModelMode(this.modelMode)
+      this.emit({ type: 'model', model: this.modelView() })
+      return
+    }
     const accepted = acceptedEffort(modelId, effort ?? undefined)
     if (effort && !accepted) throw new ControllerError(`Tingkat "${effort}" tidak berlaku untuk ${modelId}.`)
+    this.modelMode = 'manual'
+    this.agent.setModelMode(this.modelMode)
+    this.recorder.recordModelMode(this.modelMode)
     this.provider.model = modelId
     this.provider.reasoningEffort = accepted
     this.recorder.recordModel(modelId, accepted)
@@ -352,14 +545,50 @@ export class WebController {
   /* ------------------------------------------------------------ permintaan */
 
   /** Pesan dari kotak ketik: dijalankan, atau masuk antrean bila Boo sedang bekerja. */
-  submit(text: string): void {
+  submit(text: string, images: ImageAttachment[] = []): void {
     const input = text.trim()
-    if (!input) return
+    try { validateImages(images) } catch (error) {
+      throw new ControllerError(error instanceof Error ? error.message : 'Daftar attachment tidak sah.')
+    }
+    if (!input && !images.length) return
+    for (const image of images) {
+      if (!image.ref.startsWith(`${this.recorder.id}/`)) throw new ControllerError('Attachment bukan milik sesi aktif.')
+      try { imageDataUrl(image, this.options.home ?? homedir()) } catch (error) {
+        throw new ControllerError(error instanceof Error ? error.message : 'Attachment tidak sah.')
+      }
+    }
+    // Teks biasa saat agent aktif adalah koreksi terhadap pekerjaan saat ini.
+    // Command dan attachment tetap menjadi task tersendiri karena punya lifecycle lain.
+    if (this.busy && !this.question && !images.length && !input.startsWith('/')) {
+      try {
+        const position = this.agent.steer(input)
+        if (position) {
+          this.putItem({ kind: 'user', id: this.nextId(), text: input, steering: true })
+          this.notice('info', `Arahan tengah jalan diterima #${position}; diterapkan pada batas aman berikutnya.`)
+          return
+        }
+      } catch (error) {
+        throw new ControllerError(error instanceof Error ? error.message : 'Arahan tidak dapat diterima.')
+      }
+    }
     // Mengetik saat ada pertanyaan yang tidak terkait pekerjaan berarti melewatinya.
     if (!this.busy) this.dismissQuestion()
-    this.queue.push(input)
+    this.queue.push({ text: input || 'Analisis gambar yang dilampirkan.', images })
     this.emitQueue()
     void this.processNext()
+  }
+
+  uploadImage(name: string, mediaType: string, data: Buffer): ImageAttachment {
+    try {
+      return storeImageData(data, {
+        sessionId: this.recorder.id,
+        home: this.options.home ?? homedir(),
+        name,
+        declaredMediaType: mediaType,
+      })
+    } catch (error) {
+      throw new ControllerError(error instanceof Error ? error.message : 'Gambar tidak dapat disimpan.')
+    }
   }
 
   clearQueue(): void {
@@ -389,11 +618,16 @@ export class WebController {
         let job = this.internal
         this.internal = null
         if (!job) {
-          const text = this.queue.shift()
-          if (text === undefined) break
+          const queued = this.queue.shift()
+          if (queued === undefined) break
           this.emitQueue()
-          job = await this.jobFor(text)
-          if (!job) continue
+          job = await this.jobFor(queued.text)
+          if (!job) {
+            if (queued.images.length) this.notice('error', 'Attachment dilepas karena perintah ini tidak mengirim prompt ke model.')
+            continue
+          }
+          if (job.kind === 'send' && queued.images.length) job.images = queued.images
+          else if (queued.images.length) this.notice('error', 'Attachment hanya dapat dipakai pada prompt untuk model.')
         }
         await this.run(job)
       }
@@ -408,11 +642,75 @@ export class WebController {
     switch (command) {
       case '/compact':
         return { display: '/compact', prompt: '', kind: 'compact' }
+      case '/review': {
+        const base = text.slice('/review'.length).trim() || undefined
+        try {
+          return { display: base ? `/review ${base}` : '/review', prompt: reviewRequest(base), kind: 'send', mode: 'review' }
+        } catch (error) {
+          this.notice('error', error instanceof Error ? error.message : 'Base review tidak valid.')
+          return null
+        }
+      }
+      case '/plan': {
+        const task = text.slice('/plan'.length).trim()
+        if (!task) {
+          this.notice('error', 'Tulis tugas setelah /plan.')
+          return null
+        }
+        return { display: `/plan ${task}`, prompt: planRequest(task), kind: 'send', mode: 'plan' }
+      }
+      case '/implement': {
+        const saved = latestPlan(this.agent.history)
+        if (!saved) {
+          this.notice('error', 'Belum ada rencana /plan yang selesai di sesi ini.')
+          return null
+        }
+        return { display: '/implement', prompt: implementPlanRequest(saved), kind: 'send' }
+      }
+      case '/stats': {
+        const stats = aggregateLocalTraces(this.options.home ?? homedir(), this.workspace, 100)
+        const models = Object.entries(stats.models).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name} ${count}×`).join(', ')
+        this.notice('info', stats.runs
+          ? `Metrik lokal ${stats.runs} run: ${stats.completed} selesai, ${stats.cancelled} dibatalkan, ${stats.errors} error. Rata-rata ${(stats.averageDurationMs / 1_000).toFixed(1)}s, ${stats.averageTurns} turn, ${stats.averageToolCalls} tool call. Kegagalan tool ${stats.toolFailureRate}%. Review otomatis ${stats.criticReviews}, temuan ${stats.criticFindings}, gagal ${stats.criticFailures}. Risiko tinggi ${stats.highRiskRuns}. Arahan live ${stats.steeringMessages}. Evidence cache ${stats.evidenceCacheHits} hit, ${stats.evidenceCacheSavedCharacters.toLocaleString('id-ID')} karakter dihemat. Context relevance mempertahankan ${stats.contextPrioritizedMessages} pesan lama. Parallel discovery ${stats.parallelDiscoveryCalls} call dalam ${stats.parallelDiscoveryBatches} batch. Tool result store menahan ${stats.deferredToolResultCharacters.toLocaleString('id-ID')} karakter dari ${stats.truncatedToolResults} hasil besar.${models ? ` Model: ${models}.` : ''}\n\nPrompt, kode, argumen, dan output tidak direkam.`
+          : 'Belum ada trace lokal untuk workspace ini.')
+        return null
+      }
+      case '/context': {
+        const report = this.agent.contextReport()
+        const number = (value: number) => value.toLocaleString('id-ID')
+        const state = report.pressure === 'healthy' ? 'aman' : report.pressure === 'attention' ? 'perlu perhatian' : 'kritis'
+        const details = [
+          `Konteks model · ${state} · ${report.usagePercent}%`,
+          `Dikirim ${number(report.sentTokens)} / ${number(report.limitTokens)} token; ruang ${number(report.headroomTokens)}.`,
+          `System ${number(report.breakdown.system)} · pengguna ${number(report.breakdown.user)} · jawaban ${number(report.breakdown.assistant)} · hasil tool ${number(report.breakdown.toolResults)} · panggilan tool ${number(report.breakdown.toolCalls)} · skema tool ${number(report.breakdown.toolSchemas)} · gambar ${number(report.breakdown.images)}.`,
+          `Riwayat ${report.historyMessages} pesan · konteks aktif ${report.messages} · dikirim ${report.sentMessages}.`,
+          ...(report.compactionActive ? [`${report.summarizedMessages} pesan lama sudah diganti ringkasan otomatis.`] : []),
+          ...(report.droppedMessages
+            ? [`${report.droppedMessages} pesan tidak muat; ${report.prioritizedMessages} pesan lama relevan akan dipertahankan.`]
+            : report.pressure !== 'healthy'
+              ? ['Gunakan /compact bila ingin memberi ruang sebelum task besar berikutnya.']
+              : ['Belum perlu compact; Boo akan meringkas otomatis saat mendekati batas.']),
+        ]
+        this.notice(report.pressure === 'critical' ? 'error' : 'info', details.join('\n'))
+        return null
+      }
+      case '/status':
+        this.notice('info', formatTaskStatus(await this.agent.taskStatus()))
+        return null
       case '/init':
         return { display: '/init', prompt: INIT_PROMPT, kind: 'send' }
       case '/undo':
         await this.offerUndo()
         return null
+      case '/restore': {
+        const argument = text.slice('/restore'.length).trim()
+        if (argument && !/^\d+$/.test(argument)) {
+          this.notice('error', 'Pakai /restore atau /restore <id-checkpoint>.')
+          return null
+        }
+        await this.offerRestore(argument ? Number(argument) : undefined)
+        return null
+      }
       case '/spec': {
         const idea = text.slice('/spec'.length).trim()
         if (idea) {
@@ -423,22 +721,177 @@ export class WebController {
         return null
       }
       case '/help':
-        this.notice('info', 'Perintah: /spec <ide>, /spec, /undo, /compact, /init. Model, sesi, dan antrean ada di tombol halaman. Esc menghentikan pekerjaan.')
+        this.notice('info', 'Perintah: /plan <tugas>, /implement, /review [base], /spec <ide>, /spec, /undo, /restore [id], /fork, /rewind [nomor], /compact, /context, /status, /stats, /init, /commands, /hooks, /permissions, /apps, /open <alias>, /run <perintah>. Pakai @path atau @file:10-30 untuk menyertakan konteks workspace. Model, sesi, dan antrean ada di tombol halaman. Esc menghentikan pekerjaan.')
+        return null
+      case '/commands': {
+        const commands = loadPromptCommands({ workspace: this.workspace, home: this.options.home ?? homedir() })
+        this.notice(commands.length ? 'info' : 'error', commands.length
+          ? commands.map((item) => `/${item.name} — ${item.description} [${item.source}]`).join('\n')
+          : 'Belum ada custom command. Tambahkan .boo/commands/<nama>.md atau ~/.boo/commands/<nama>.md.')
+        return null
+      }
+      case '/hooks': {
+        const hooks = loadHooks(this.workspace, this.options.home ?? homedir())
+        this.notice(hooks.length ? 'info' : 'error', hooks.length
+          ? hooks.map((hook) => `${hook.event}:${hook.id} · ${hook.matcher} → ${hook.command} [${hook.source}]`).join('\n')
+          : 'Belum ada lifecycle hook. Tambahkan .boo/hooks.json atau ~/.boo/hooks.json.')
+        return null
+      }
+      case '/permissions': {
+        const policy = loadPermissionPolicy({ workspace: this.workspace, home: this.options.home ?? homedir() })
+        const rules = policy.rules.length ? policy.rules.map(permissionRuleLabel) : ['(belum ada aturan aktif)']
+        const issues = policy.issues.map((issue) => `PERINGATAN: ${issue}`)
+        this.notice('info', [
+          'Aturan izin persisten:',
+          ...rules.map((rule) => `- ${rule}`),
+          ...issues.map((issue) => `- ${issue}`),
+          '',
+          `Pribadi (allow/ask/deny): ${policy.globalPath}`,
+          `Proyek (ask/deny saja): ${policy.projectPath}`,
+        ].join('\n'))
+        return null
+      }
+      case '/apps':
+        this.showApps()
+        return null
+      case '/open':
+        await this.openRegisteredApp(text.slice('/open'.length).trim())
+        return null
+      case '/run':
+        await this.runDirectCommand(text.slice('/run'.length).trim())
         return null
       case '/model':
+        if (text === '/model auto') this.setModel('auto', null)
+        else this.notice('info', '/model tersedia di tombol pemilih model; /model auto mengaktifkan pemilihan otomatis.')
+        return null
       case '/resume':
       case '/queue':
         this.notice('info', `${command} tersedia sebagai tombol di halaman ini.`)
         return null
-      default:
-        return { display: text, prompt: text, kind: 'send' }
+      case '/fork':
+        this.forkSession()
+        return null
+      case '/rewind': {
+        const argument = text.slice('/rewind'.length).trim()
+        if (argument && !/^\d+$/.test(argument)) {
+          this.notice('error', 'Pakai /rewind atau /rewind <nomor>.')
+          return null
+        }
+        try {
+          await this.rewindSession(argument ? Number(argument) : undefined)
+        } catch (error) {
+          this.notice('error', error instanceof Error ? error.message : 'Sesi tidak dapat diputar balik.')
+        }
+        return null
+      }
+      default: {
+        try {
+          const expanded = expandPromptCommand(text, loadPromptCommands({ workspace: this.workspace, home: this.options.home ?? homedir() }))
+          return expanded ? { display: expanded.display, prompt: expanded.prompt, kind: 'send' } : { display: text, prompt: text, kind: 'send' }
+        } catch (error) {
+          this.notice('error', error instanceof Error ? error.message : 'Custom command gagal dimuat.')
+          return null
+        }
+      }
     }
+  }
+
+  private showApps(): void {
+    const catalog = loadApps(this.workspace)
+    const list = catalog.apps.length
+      ? catalog.apps.map((app) => `- ${app.id}: ${app.label}`).join('\n')
+      : 'Belum ada aplikasi terdaftar.'
+    const hint = 'Daftarkan alias pada ~/.boo/apps.json atau <workspace>/.boo/apps.json, lalu buka dengan /open <alias>.'
+    this.notice(catalog.apps.length ? 'info' : 'error', [list, hint, ...catalog.issues].join('\n'))
+  }
+
+  private async openRegisteredApp(id: string): Promise<void> {
+    if (!id) {
+      this.notice('info', 'Pakai: /open <alias>. Lihat alias yang tersedia dengan /apps.')
+      return
+    }
+    const app = findApp(loadApps(this.workspace), id)
+    if (!app) {
+      this.notice('error', `Aplikasi "${id}" tidak terdaftar. Jalankan /apps untuk melihat alias yang tersedia.`)
+      return
+    }
+    const answer = await this.ask({
+      title: 'Buka aplikasi',
+      subject: app.label,
+      prompt: `Buka aplikasi ${app.label}?`,
+      options: [
+        { id: 'allow', label: 'Ya', tone: 'primary' },
+        { id: 'deny', label: 'Tidak', tone: 'danger' },
+      ],
+    })
+    if (answer.optionId !== 'allow') {
+      this.notice('info', `Membuka ${app.label} dibatalkan.`)
+      return
+    }
+    try {
+      await launchApp(app, this.workspace)
+      this.notice('success', `${app.label} sedang dibuka.`)
+    } catch (error) {
+      this.notice('error', `Gagal membuka ${app.label}: ${error instanceof Error ? error.message : 'kesalahan tidak dikenal'}`)
+    }
+  }
+
+  private async runDirectCommand(command: string): Promise<void> {
+    if (!command) {
+      this.notice('info', 'Pakai: /run <perintah>. Contoh: /run git status')
+      return
+    }
+    const answer = await this.ask({
+      title: 'Jalankan perintah',
+      subject: '',
+      prompt: 'Jalankan perintah ini?',
+      body: { type: 'command', command, description: 'Dijalankan di folder workspace.' },
+      options: [
+        { id: 'allow', label: 'Ya', tone: 'primary' },
+        { id: 'deny', label: 'Tidak', tone: 'danger' },
+      ],
+    })
+    if (answer.optionId !== 'allow') {
+      this.notice('info', 'Perintah dibatalkan.')
+      return
+    }
+    this.setBusy(true)
+    this.setStatus({ label: 'Running', detail: command, startedAt: Date.now() })
+    const abort = new AbortController()
+    this.abort = abort
+    let result
+    try {
+      result = await runCommand(command, {
+        cwd: this.workspace,
+        shell: resolveShell(),
+        sandbox: resolveSandboxPolicy(this.options.config.BOO_SANDBOX, this.options.config.BOO_NETWORK_ACCESS),
+        timeoutMs: 120_000,
+        signal: abort.signal,
+      })
+    } finally {
+      this.abort = null
+      this.setStatus(null)
+      this.setBusy(false)
+    }
+    if (!result) return
+    const message = result.cancelled
+      ? 'Perintah dibatalkan.'
+      : result.timedOut
+        ? 'Waktu perintah habis setelah 120 detik.'
+        : result.spawnError || result.exitCode !== 0
+          ? `Perintah gagal: ${result.spawnError ?? `exit ${result.exitCode ?? '?'}`}`
+          : 'Perintah selesai.'
+    this.notice(result.cancelled || result.timedOut || result.spawnError || result.exitCode !== 0 ? 'error' : 'success', result.output ? `${message}\n\n${result.output}` : message)
   }
 
   private async run(job: Job): Promise<void> {
     this.setBusy(true)
     const spec = specPromptTitle(job.prompt)
-    this.putItem({ kind: 'user', id: this.nextId(), text: job.display, ...(spec === null ? {} : { spec }) })
+    this.putItem({
+      kind: 'user', id: this.nextId(), text: job.display,
+      ...(spec === null ? {} : { spec }),
+      ...(job.images?.length ? { attachments: job.images.map((image) => image.name) } : {}),
+    })
     const presenter = new RequestPresenter({
       putItem: (item, toEnd) => this.putItem(item, toEnd),
       appendText: (id, text) => this.appendText(id, text),
@@ -454,11 +907,27 @@ export class WebController {
     const wasStarted = this.recorder.started
 
     try {
-      const events: AsyncGenerator<AgentEvent> = job.kind === 'compact'
+      const rawEvents: AsyncGenerator<AgentEvent> = job.kind === 'compact'
         ? this.agent.compact({ signal: abort.signal })
-        : this.agent.send(job.prompt, { signal: abort.signal })
+        : this.agent.send(job.prompt, { signal: abort.signal, ...(job.mode ? { mode: job.mode } : {}), ...(job.images?.length ? { images: job.images } : {}) })
+      const trace = new LocalRunTrace({
+        home: this.options.home ?? homedir(), workspace: this.workspace, surface: 'web', kind: job.kind,
+        mode: this.modelMode, model: this.provider.model, reasoningEffort: this.provider.reasoningEffort,
+        requestCharacters: job.kind === 'compact' ? 0 : job.prompt.length,
+        enabled: tracingEnabled(this.options.config.BOO_TRACE),
+      })
+      const journal = new PersistentRunJournal({
+        home: this.options.home ?? homedir(), workspace: this.workspace,
+        sessionId: this.recorder.id, surface: 'web', kind: job.kind, model: this.provider.model,
+        ...(this.provider.reasoningEffort ? { reasoningEffort: this.provider.reasoningEffort } : {}),
+      })
+      const events = journalAgentEvents(traceAgentEvents(rawEvents, trace), journal)
       for await (const event of events) {
-        if (event.type === 'cancelled' || event.type === 'error' || event.type === 'turn-limit') outcome = 'stopped'
+        if (event.type === 'model-selected') {
+          this.recorder.recordModel(event.model, event.reasoningEffort)
+          this.emit({ type: 'model', model: this.modelView() })
+        }
+        if (event.type === 'cancelled' || event.type === 'error' || event.type === 'turn-limit' || event.type === 'tool-loop' && event.stage === 'stopped') outcome = 'stopped'
         if (event.type === 'compacted' || event.type === 'compaction-failed') compactionReported = true
         presenter.handle(event)
       }
@@ -512,7 +981,41 @@ export class WebController {
     question.resolve({ optionId: 'dismiss', text: '' })
   }
 
-  private async askPermission({ name, args, detail }: { name: string; args: Record<string, unknown>; detail: DiffLine[] | null }): Promise<boolean | PermissionDecision> {
+  /** Pertanyaan requirement berbeda dari approval: jawabannya kembali sebagai hasil tool. */
+  private async askUser(question: UserQuestion): Promise<UserAnswer> {
+    this.presenter?.commitPhase()
+    this.setStatus(null)
+    const answer = await this.ask({
+      title: question.header || 'Pertanyaan Boo',
+      subject: '',
+      prompt: question.question,
+      options: [
+        ...question.options.map((option, index) => ({
+          id: `choice-${index}`,
+          label: option.description ? `${option.label} — ${option.description}` : option.label,
+          tone: index === 0 ? 'primary' as const : undefined,
+        })),
+        ...(question.allowCustom ? [{
+          id: 'custom',
+          label: 'Jawaban lain',
+          input: { placeholder: 'Tulis jawaban kamu', required: true },
+        }] : []),
+      ],
+    })
+    if (answer.optionId === 'custom' && answer.text) {
+      this.presenter?.decision(true, `Jawaban · ${question.header ? `${question.header}: ` : ''}${answer.text}`)
+      return { text: answer.text }
+    }
+    const match = /^choice-(\d+)$/.exec(answer.optionId)
+    const selected = match ? question.options[Number(match[1])]?.label : undefined
+    if (selected) {
+      this.presenter?.decision(true, `Jawaban · ${question.header ? `${question.header}: ` : ''}${selected}`)
+      return { selected }
+    }
+    return { cancelled: true }
+  }
+
+  private async askPermission({ name, args, detail, allowAlways, promptInjectionRisk }: { name: string; args: Record<string, unknown>; detail: DiffLine[] | null; allowAlways: boolean; promptInjectionRisk?: boolean }): Promise<boolean | PermissionDecision> {
     let fileExists = false
     try {
       fileExists = typeof args.path === 'string' && existsSync(resolveInWorkspace(this.workspace, args.path))
@@ -521,12 +1024,40 @@ export class WebController {
     }
     const request = describeRequest(name, args, fileExists)
     const command = typeof args.command === 'string' ? args.command : ''
-    const key = request.kind === 'edit' ? 'edit' : request.kind === 'command' ? `command:${command}` : `tool:${name}`
+    const appId = typeof args.id === 'string' ? args.id : ''
+    const key = request.kind === 'edit'
+      ? 'edit'
+      : request.kind === 'command'
+        ? `command:${command}`
+        : name === 'open_app'
+          ? `app:${appId}`
+          : `tool:${name}`
     const summary = request.kind === 'command'
       ? `${request.title} · ${command}`
       : request.subject ? `${request.title} ${request.subject}` : request.title
 
-    if (this.sessionApprovals.has(key)) {
+    const home = this.options.home ?? homedir()
+    const configured = evaluatePermission(loadPermissionPolicy({ workspace: this.workspace, home }), { tool: name, args })
+    if (configured?.effect === 'deny') {
+      this.presenter?.decision(false, `${summary} · ditolak oleh ${configured.rule.id} [${configured.rule.source}]`)
+      return { allowed: false, feedback: `Aturan izin ${configured.rule.id} menolak tindakan ini.` }
+    }
+    const sandbox = inspectSandbox(
+      this.workspace,
+      resolveSandboxPolicy(this.options.config.BOO_SANDBOX, this.options.config.BOO_NETWORK_ACCESS),
+    )
+    const configuredEffect = resolveConfiguredPermission(configured, {
+      allowAlways,
+      commandAction: request.kind === 'command',
+      sandbox,
+    })
+    if (configuredEffect === 'allow') {
+      this.presenter?.decision(true, `${summary} · diizinkan oleh ${configured!.rule.id} [${configured!.rule.source}]`)
+      return true
+    }
+    const forceAsk = configuredEffect === 'ask'
+
+    if (!forceAsk && allowAlways && this.sessionApprovals.has(key)) {
       this.presenter?.decision(true, `${summary} · diizinkan otomatis di sesi ini`)
       return true
     }
@@ -551,11 +1082,13 @@ export class WebController {
     const answer = await this.ask({
       title: request.title,
       subject: request.kind === 'command' ? request.subject : request.subject,
-      prompt: request.question,
+      prompt: promptInjectionRisk
+        ? `Sinyal prompt injection aktif. Periksa tindakan ini secara mandiri dan izinkan hanya jika sesuai permintaanmu.\n\n${request.question}`
+        : request.question,
       ...(body ? { body } : {}),
       options: [
         { id: 'allow', label: 'Ya', tone: 'primary' },
-        { id: 'always', label: request.allowAlways },
+        ...(allowAlways ? [{ id: 'always', label: request.allowAlways }] : []),
         { id: 'deny', label: 'Tidak', tone: 'danger', input: { placeholder: 'Beri tahu Boo apa yang harus dilakukan (opsional)', required: false } },
       ],
     })
@@ -629,6 +1162,80 @@ export class WebController {
     const deleted = done?.entries.filter((entry) => entry.action === 'delete').length ?? 0
     const parts = [restored ? `${restored} berkas dikembalikan` : '', deleted ? `${deleted} berkas baru dihapus` : ''].filter(Boolean)
     this.notice('undo', `${parts.join(', ')}. Boo diberi tahu di permintaan berikutnya.`)
+  }
+
+  private async offerRestore(requestedId?: number): Promise<void> {
+    const points = this.agent.checkpoints.restorePoints()
+    if (!points.length) {
+      this.notice('info', 'Belum ada checkpoint perubahan file di sesi ini.')
+      return
+    }
+    let selected = requestedId === undefined
+      ? undefined
+      : points.find((point) => point.checkpointId === requestedId)
+    if (requestedId !== undefined && !selected) {
+      this.notice('error', `Checkpoint #${requestedId} tidak ditemukan di sesi ini.`)
+      return
+    }
+    if (!selected) {
+      const recent = points.slice(0, 20)
+      const answer = await this.ask({
+        title: 'Pulihkan workspace',
+        subject: recent.length < points.length ? `20 checkpoint terbaru dari ${points.length}` : `${points.length} checkpoint`,
+        prompt: 'Kembali ke keadaan sebelum checkpoint mana?',
+        body: { type: 'text', text: 'Checkpoint terpilih dan seluruh perubahan file sesudahnya akan dikembalikan. Riwayat percakapan dan perubahan dari command tidak ikut diputar balik.' },
+        options: [
+          ...recent.map((point) => ({
+            id: `checkpoint-${point.checkpointId}`,
+            label: `#${point.checkpointId} · ${point.prompt.replace(/\s+/g, ' ').slice(0, 80)}${point.ranCommands ? ' · ada command' : ''}`,
+          })),
+          { id: 'cancel', label: 'Batal' },
+        ],
+      })
+      if (answer.optionId === 'dismiss' || answer.optionId === 'cancel') return
+      const id = Number(answer.optionId.slice('checkpoint-'.length))
+      selected = points.find((point) => point.checkpointId === id)
+      if (!selected) {
+        this.notice('error', 'Checkpoint tidak lagi tersedia.')
+        return
+      }
+    }
+
+    let plan
+    try {
+      plan = await this.agent.checkpoints.planRestore(selected.checkpointId)
+    } catch (error) {
+      this.notice('error', error instanceof Error ? error.message : 'Checkpoint tidak dapat ditinjau.')
+      return
+    }
+    if (!plan) {
+      this.notice('error', 'Checkpoint tidak lagi tersedia.')
+      return
+    }
+    const answer = await this.ask({
+      title: 'Konfirmasi restore workspace',
+      subject: `checkpoint #${plan.checkpointId} · ${plan.prompt.replace(/\s+/g, ' ').slice(0, 100)}`,
+      prompt: `Kembalikan ${plan.entries.length} file melewati ${plan.checkpointCount} checkpoint?`,
+      body: { type: 'undo', entries: plan.entries, ranCommands: plan.ranCommands },
+      options: [
+        { id: 'restore', label: 'Ya, pulihkan workspace', tone: 'danger' },
+        { id: 'keep', label: 'Tidak' },
+      ],
+    })
+    if (answer.optionId !== 'restore') return
+    if (this.busy) {
+      this.notice('info', 'Boo sedang bekerja; restore tidak dijalankan.')
+      return
+    }
+    try {
+      const done = await this.agent.restore(plan.checkpointId, plan.fingerprint)
+      const restored = done?.entries.filter((entry) => entry.action === 'restore').length ?? 0
+      const deleted = done?.entries.filter((entry) => entry.action === 'delete').length ?? 0
+      const parts = [restored ? `${restored} file dikembalikan` : '', deleted ? `${deleted} file baru dihapus` : ''].filter(Boolean)
+      this.notice('undo', `${parts.join(', ') || 'Workspace sudah berada pada keadaan target'}. ${plan.checkpointCount} checkpoint dilepas; percakapan tetap utuh.`)
+    } catch (error) {
+      this.notice('error', error instanceof Error ? error.message : 'Restore gagal.')
+    }
   }
 
   /* ------------------------------------------------------------ mode spec */

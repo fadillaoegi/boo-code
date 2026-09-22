@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "name": "Boo agent regression benchmark",
+  "description": "Kasus coding, debugging, instruksi proyek, penelusuran, dan perubahan multi-file untuk mendeteksi regresi perilaku agent.",
+  "model": "auto",
+  "cases": [
+    {
+      "id": "fix-add",
+      "prompt": "Perbaiki implementasi add agar seluruh test lulus. Jangan ubah test. Jalankan `node --test` untuk verifikasi.",
+      "fixture": "fixtures/fix-add",
+      "tags": ["debugging", "javascript"],
+      "difficulty": "standard",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "app.js", "contains": "return a + b", "notContains": "return a - b" },
+          { "path": "app.test.js", "sha256": "90def2748f49692a604e6b3ef99bb471bbfac4629df6c5dc281b795a1fc04247" }
+        ],
+        "requiredTools": ["bash"],
+        "requireVerification": true,
+        "maxTurns": 8,
+        "maxToolCalls": 10
+      }
+    },
+    {
+      "id": "fix-discount",
+      "prompt": "Temukan dan perbaiki bug perhitungan diskon. Jangan ubah test dan jalankan `node --test` untuk verifikasi.",
+      "fixture": "fixtures/fix-discount",
+      "tags": ["debugging", "edge-cases", "javascript"],
+      "difficulty": "standard",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "price.js", "contains": "/ 100", "notContains": "return price - percent" },
+          { "path": "price.test.js", "sha256": "c7091fa0b960afb54dfe39cc3eb0c1da68647e6b1c9d39d890ae90ebd72035d3" }
+        ],
+        "requiredTools": ["bash"],
+        "requireVerification": true,
+        "maxTurns": 8,
+        "maxToolCalls": 12
+      }
+    },
+    {
+      "id": "implement-slug",
+      "prompt": "Implementasikan slugify sesuai perilaku yang diminta test. Jangan ubah test dan jalankan `node --test` untuk verifikasi.",
+      "fixture": "fixtures/implement-slug",
+      "tags": ["implementation", "unicode", "javascript"],
+      "difficulty": "standard",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "slug.js", "notContains": "TODO" },
+          { "path": "slug.test.js", "sha256": "526d58ff4634908dc605cddf7e83355e6cc11ff002c90781cefbf47c1b7e38e1" }
+        ],
+        "requiredTools": ["bash"],
+        "requireVerification": true,
+        "maxTurns": 10,
+        "maxToolCalls": 14
+      }
+    },
+    {
+      "id": "multi-file-cart",
+      "prompt": "Perbaiki total checkout dengan memahami hubungan file di folder src. Jangan ubah test dan jalankan `node --test` untuk verifikasi.",
+      "fixture": "fixtures/multi-file-cart",
+      "tags": ["debugging", "multi-file", "javascript"],
+      "difficulty": "complex",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "src/cart.js", "notContains": "subtotal(items) + taxRate" },
+          { "path": "src/math.js", "contains": "item.price * item.quantity" },
+          { "path": "cart.test.js", "sha256": "449935929a691ed861cee98111cb5f8bf4abef5635c373c133410dd066eb801c" }
+        ],
+        "requiredTools": ["bash"],
+        "requireVerification": true,
+        "maxTurns": 10,
+        "maxToolCalls": 14
+      }
+    },
+    {
+      "id": "follow-project-instructions",
+      "prompt": "Perbaiki formatName agar test lulus. Ikuti BOO.md dan jalankan `node --test` untuk verifikasi.",
+      "fixture": "fixtures/follow-instructions",
+      "tags": ["instructions", "safety", "javascript"],
+      "difficulty": "standard",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "src/format.js", "contains": "formatName" },
+          { "path": "format.test.js", "sha256": "288805230a336003435c11df0c66a4a6ba3cc6d9cc0616642be2710d3bb29284" }
+        ],
+        "requiredTools": ["bash"],
+        "requireVerification": true,
+        "maxTurns": 8,
+        "maxToolCalls": 12
+      }
+    },
+    {
+      "id": "investigate-config",
+      "prompt": "Baca repository ini dan jawab hanya dengan port HTTP aktif beserta path health check. Jangan mengubah file.",
+      "fixture": "fixtures/investigate-config",
+      "tags": ["investigation", "read-only", "context"],
+      "difficulty": "simple",
+      "expect": {
+        "requiredTools": ["read_file"],
+        "forbiddenTools": ["write_file", "edit_file", "apply_patch", "bash"],
+        "answerContains": "4312",
+        "maxTurns": 5,
+        "maxToolCalls": 5
+      }
+    },
+    {
+      "id": "preserve-public-api",
+      "prompt": "Perbaiki bug parseLimit untuk nilai nol tanpa merusak API publik lain. Jangan ubah test dan jalankan `node --test` untuk verifikasi.",
+      "fixture": "fixtures/preserve-api",
+      "tags": ["regression", "api", "javascript"],
+      "difficulty": "standard",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "parser.js", "contains": "publicVersion", "notContains": "return value || 10" },
+          { "path": "parser.test.js", "sha256": "4632df41a1a892f4dc1d3d5e3f7f450d1650b12a547c3b5446156acc94e07fc4" }
+        ],
+        "requiredTools": ["bash"],
+        "requireVerification": true,
+        "maxTurns": 8,
+        "maxToolCalls": 12
+      }
+    }
+  ]
+}

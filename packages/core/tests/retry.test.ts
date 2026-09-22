@@ -132,7 +132,8 @@ test('batas langkah: pengguna ditanya, boleh lanjut, lalu berhenti dengan riwaya
     return {
       role: 'assistant',
       content: null,
-      tool_calls: [{ id: `c${counter}`, type: 'function', function: { name: 'list_dir', arguments: '{"path":"."}' } }],
+      // Argumen dibedakan agar test ini mengukur turn limit, bukan loop guard.
+      tool_calls: [{ id: `c${counter}`, type: 'function', function: { name: 'list_dir', arguments: JSON.stringify({ path: '.', attempt: counter }) } }],
     }
   }])
   const asked: number[] = []

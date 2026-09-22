@@ -25,6 +25,10 @@ const BOO_KEYS = [
   'BOO_EFFORT',
   'BOO_MAX_CONTEXT_TOKENS',
   'BOO_MAX_TURNS',
+  'BOO_SANDBOX',
+  'BOO_NETWORK_ACCESS',
+  'BOO_TRACE',
+  'BOO_AUTO_REVIEW',
 ] as const
 
 export type BooKey = (typeof BOO_KEYS)[number]

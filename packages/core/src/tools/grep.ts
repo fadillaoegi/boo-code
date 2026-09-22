@@ -27,6 +27,7 @@ export const grepTool: Tool<Args> = {
   name: 'grep',
   description: 'Search file contents with a regular expression.',
   risk: 'safe',
+  parallelSafe: true,
   schema: {
     type: 'function',
     function: {
@@ -75,10 +76,12 @@ export const grepTool: Tool<Args> = {
         skippedSecrets += 1
         continue
       }
+      let buffer: Buffer
       let content: string
       try {
         if ((await stat(file.absolute)).size > MAX_FILE_BYTES) continue
-        content = await readFile(file.absolute, 'utf8')
+        buffer = await readFile(file.absolute)
+        content = buffer.toString('utf8')
       } catch {
         continue
       }
@@ -100,6 +103,7 @@ export const grepTool: Tool<Args> = {
         lines.push(`${file.path}:${index + 1}: ${text}`)
         matches += 1
       }
+      if (inFile) context.fileSnapshots?.observe(file.absolute, buffer)
       if (inFile && args.files_only) counts.push(`${file.path} (${inFile})`)
       if (truncated) break
     }

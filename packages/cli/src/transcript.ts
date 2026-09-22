@@ -21,7 +21,9 @@ function renderItem(item: ViewItem, width: number): string {
     case 'user': {
       const undo = item.afterUndo ? `  ${theme.accent('↺')} ${theme.muted('perubahan berkas sebelumnya dibatalkan dengan /undo')}\n\n` : ''
       const [first, ...rest] = item.text.split('\n')
-      return `${undo}${theme.accentBold('›')} ${first}\n${rest.map((line) => `  ${line}\n`).join('')}`
+      const attachments = item.attachments?.length ? `  ${theme.muted(`gambar: ${item.attachments.join(', ')}`)}\n` : ''
+      const marker = item.steering ? theme.accent('↳') : theme.accentBold('›')
+      return `${undo}${marker} ${first}\n${rest.map((line) => `  ${line}\n`).join('')}${attachments}`
     }
     case 'answer': {
       const renderer = new MarkdownRenderer({ width })

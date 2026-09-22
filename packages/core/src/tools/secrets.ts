@@ -6,10 +6,9 @@
  * model tidak tahu file mana yang berbahaya, dan sekali isinya terkirim ia tidak
  * bisa ditarik kembali.
  *
- * Penolakan ini bukan jaminan mutlak. `bash` tetap dapat membaca file apa pun
- * lewat perintah seperti `cat .env`, dan itu disengaja: perintah shell selalu
- * ditampilkan utuh saat meminta izin, sehingga pengguna dapat melihat dan
- * menolaknya sendiri.
+ * Penolakan path ini bukan jaminan tunggal. `bash` tetap dapat membaca file lewat
+ * perintah yang disetujui pengguna; lapisan outbound provider kemudian meredaksi
+ * pola credential berkeyakinan tinggi sebagai pertahanan terakhir.
  */
 
 import { basename } from 'node:path'

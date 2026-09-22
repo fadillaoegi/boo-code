@@ -3,6 +3,8 @@ import type { Tool } from '../domain/tool.ts'
 import { condense, diffLines, type DiffLine } from './diff.ts'
 import { isSensitivePath, sensitiveRefusal } from './secrets.ts'
 import { resolveInWorkspace } from './workspace.ts'
+import { isProtectedWorkspacePath } from './sandbox.ts'
+import { FILE_CHANGED_MESSAGE } from './fileSnapshots.ts'
 
 interface Args { path: string; old_text: string; new_text: string }
 
@@ -10,6 +12,8 @@ export const editFileTool: Tool<Args> = {
   name: 'edit_file',
   description: 'Replace an exact snippet of text in a file. The snippet must appear exactly once.',
   risk: 'confirm',
+  writesWorkspace: true,
+  mutatesWorkspace: true,
   schema: {
     type: 'function',
     function: {
@@ -33,8 +37,11 @@ export const editFileTool: Tool<Args> = {
     // nomor baris sesungguhnya dan baris di sekitarnya — cuplikan sendirian tidak
     // memberi tahu di mana perubahan itu jatuh.
     try {
-      if (isSensitivePath(args.path)) throw new Error('rahasia')
-      const original = await readFile(resolveInWorkspace(context.workspace, args.path), 'utf8')
+      if (isSensitivePath(args.path) || isProtectedWorkspacePath(args.path)) throw new Error('path dilindungi')
+      const target = resolveInWorkspace(context.workspace, args.path)
+      const buffer = await readFile(target)
+      context.fileSnapshots?.capture(target, buffer)
+      const original = buffer.toString('utf8')
       if (original.split(args.old_text).length - 1 === 1) {
         return condense(diffLines(original, original.replace(args.old_text, args.new_text)))
       }
@@ -45,11 +52,18 @@ export const editFileTool: Tool<Args> = {
     return condense(diffLines(args.old_text, args.new_text))
   },
   async run(args, context) {
+    if (isProtectedWorkspacePath(args.path)) {
+      return { content: `Ditolak: ${args.path} adalah path agent yang dilindungi.`, isError: true }
+    }
     if (isSensitivePath(args.path)) {
       return { content: sensitiveRefusal(args.path), isError: true }
     }
     const target = resolveInWorkspace(context.workspace, args.path)
-    const original = await readFile(target, 'utf8')
+    const buffer = await readFile(target)
+    if (context.fileSnapshots && !context.fileSnapshots.matches(target, buffer)) {
+      return { content: FILE_CHANGED_MESSAGE(args.path), isError: true }
+    }
+    const original = buffer.toString('utf8')
 
     const occurrences = original.split(args.old_text).length - 1
     // Kegagalan dikembalikan sebagai hasil, bukan exception: model perlu
@@ -67,8 +81,10 @@ export const editFileTool: Tool<Args> = {
     await context.checkpoint?.beforeWrite(target)
     // Pengganti berupa fungsi: string biasa menafsirkan $&, $1, dan $$ di new_text,
     // sehingga kode seperti `$$` atau template shell berubah diam-diam.
-    await writeFile(target, original.replace(args.old_text, () => args.new_text), 'utf8')
+    const updated = original.replace(args.old_text, () => args.new_text)
+    await writeFile(target, updated, 'utf8')
     await context.checkpoint?.afterWrite(target)
+    context.fileSnapshots?.observe(target, Buffer.from(updated))
     return { content: `Diubah: ${args.path}` }
   },
 }

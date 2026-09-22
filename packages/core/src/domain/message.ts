@@ -2,6 +2,16 @@
 
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool'
 
+/** Referensi gambar privat yang disimpan Boo; path sumber asli tidak direkam. */
+export interface ImageAttachment {
+  id: string
+  name: string
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+  /** Path relatif di bawah ~/.boo/attachments. */
+  ref: string
+  bytes: number
+}
+
 export interface ToolCall {
   /**
    * Format id berbeda antarprovider (`call_read_file_<ts>_0` pada ag/*,
@@ -19,6 +29,8 @@ export interface ToolCall {
 export interface Message {
   role: MessageRole
   content?: string | null
+  /** Hanya pesan user. Provider mengubah referensi ini menjadi image_url. */
+  images?: ImageAttachment[]
   /** Penalaran model thinking, terpisah dari content. Bukan balasan kosong. */
   reasoning_content?: string
   tool_calls?: ToolCall[]
