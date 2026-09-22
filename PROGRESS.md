@@ -32,21 +32,23 @@ fungsi, perintah verifikasi).
   dependency paket rilis. Bundel kembali dari 10,8 MB ke sekitar 1,0 MB, dan
   bahasa tanpa parser tetap dilayani mode `fallback`. Didokumentasikan di README
   bagian "Graf simbol dari AST".
+- **#72 Banyak penyedia model** — `packages/core/src/provider/profiles.ts`
+  mendaftarkan 9Router, OpenAI, Anthropic, OpenRouter, Ollama, dan alamat
+  OpenAI-compatible lain. `NineRouterProvider` menjadi gerbang: id model berawalan
+  penyedia (`anthropic:claude-sonnet-4-6`) menentukan tujuan, model tanpa awalan
+  tetap ke penyedia utama sehingga sesi lama tidak berubah. Adapter Anthropic di
+  `provider/anthropic.ts`, error bersama di `provider/errors.ts`. `boo-code setup`
+  memasang beberapa penyedia sekaligus, `doctor` melaporkannya, dan `/model`
+  menampilkan semuanya dalam satu daftar.
 
-- **Dukungan banyak penyedia model dan wizard kunci API** — selesai, lihat di bawah.
-  Yang belum: mencoba jalur Anthropic dengan kunci sungguhan (baru diuji lewat
-  server tiruan di `packages/core/tests/providers.test.ts`), dan formulir kunci di
-  antarmuka web (sekarang penyedia hanya diatur lewat `boo-code setup`).
+## Sedang dikerjakan
 
-## Sudah selesai (lanjutan)
+Tidak ada. Yang tersisa dari #72, bila ingin dilanjutkan:
 
-- **Banyak penyedia model** — `packages/core/src/provider/profiles.ts` mendaftarkan
-  9Router, OpenAI, Anthropic, OpenRouter, Ollama, dan alamat OpenAI-compatible lain.
-  `NineRouterProvider` menjadi gerbang: id model berawalan penyedia
-  (`anthropic:claude-sonnet-4-6`) menentukan tujuan, model tanpa awalan tetap ke
-  penyedia utama. Adapter Anthropic ada di `provider/anthropic.ts`, error bersama di
-  `provider/errors.ts`. `boo-code setup` kini memasang beberapa penyedia sekaligus,
-  `doctor` melaporkannya, dan `/model` menampilkan semuanya dalam satu daftar.
+- Mencoba jalur Anthropic dengan kunci API sungguhan; sekarang baru diuji lewat
+  server tiruan di `packages/core/tests/providers.test.ts`.
+- Formulir kunci penyedia di antarmuka web; sekarang penyedia hanya diatur lewat
+  `boo-code setup`.
 
 ## Berikutnya (peta jalan Codex, nomor 2–10)
 
