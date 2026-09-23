@@ -175,13 +175,15 @@ function emitJson(value: Record<string, unknown>): void {
 function jsonEvent(event: AgentEvent): Record<string, unknown> | null {
   switch (event.type) {
     case 'model-routing': return { type: 'model.routing' }
-    case 'model-selected': return { type: 'model.selected', model: event.model, reasoning_effort: event.reasoningEffort ?? null, difficulty: event.difficulty, source: event.source, routing_policy: event.routingPolicy ?? 'static', performance_samples: event.performanceSamples ?? null, reason: event.reason }
+    case 'model-selected': return { type: 'model.selected', model: event.model, reasoning_effort: event.reasoningEffort ?? null, difficulty: event.difficulty, source: event.source, routing_policy: event.routingPolicy ?? 'static', performance_samples: event.performanceSamples ?? null, capability_samples: event.capabilitySamples ?? null, capability_avoided: event.capabilityAvoided ?? null, reason: event.reason }
     case 'turn-start': return { type: 'turn.started', turn: event.turn }
     case 'text': return { type: 'assistant.delta', text: event.delta }
     case 'tool-start': return { type: 'tool.started', id: event.callId, name: event.name, preview: event.preview }
     case 'tool-cache-hit': return { type: 'tool.cache_hit', id: event.callId, name: event.name, ref: event.ref, saved_characters: event.savedCharacters }
     case 'tool-result-truncated': return { type: 'tool.result_truncated', id: event.callId, name: event.name, ref: event.ref ?? null, original_characters: event.originalCharacters, visible_characters: event.visibleCharacters }
     case 'tool-parallel': return { type: `tool.parallel_${event.stage}`, name: event.name, tools: event.tools, calls: event.calls, duration_ms: event.durationMs ?? null }
+    case 'tool-recovery': return { type: 'tool.recovery', id: event.callId, name: event.name, kind: event.kind, reason: event.reason, category: event.category, duration_ms: event.durationMs, next_idle_timeout_ms: event.nextIdleTimeoutMs, partial_output: event.partialOutput }
+    case 'lsp-session': return { type: `lsp.session_${event.stage}`, open_documents: event.openDocuments }
     case 'tool-end': return { type: 'tool.completed', id: event.callId, name: event.name, status: event.cancelled ? 'cancelled' : event.isError ? 'failed' : 'completed' }
     case 'tool-denied': return { type: 'tool.denied', id: event.callId, name: event.name }
     case 'tool-invalid': return { type: 'tool.invalid', id: event.callId, name: event.name, kind: event.kind, issues: event.issues }
@@ -190,14 +192,17 @@ function jsonEvent(event: AgentEvent): Record<string, unknown> | null {
     case 'hook-start': return { type: 'hook.started', event: event.event, id: event.id }
     case 'hook-end': return { type: 'hook.completed', event: event.event, id: event.id, status: event.denied ? 'denied' : event.success ? 'completed' : 'failed' }
     case 'retry': return { type: 'model.retry', attempt: event.attempt, max_attempts: event.maxAttempts, delay_ms: event.delayMs, error: event.message }
-    case 'context-trimmed': return { type: 'context.trimmed', dropped_messages: event.droppedMessages, estimated_tokens: event.estimatedTokens, prioritized_messages: event.prioritizedMessages }
+    case 'context-trimmed': return { type: 'context.trimmed', dropped_messages: event.droppedMessages, estimated_tokens: event.estimatedTokens, prioritized_messages: event.prioritizedMessages, dependency_messages: event.dependencyMessages ?? 0, dependency_edges: event.dependencyEdges ?? 0 }
     case 'instructions-reloaded': return { type: 'instructions.reloaded', files: event.files.map((file) => ({ label: file.label, scope: file.scope ?? null, truncated: file.truncated })) }
     case 'verification-incomplete': return { type: 'verification.incomplete', files: event.files, attempted: event.attempted }
+    case 'change-impact': return { type: 'change_impact.analyzed', changed_files: event.changedFiles, affected_files: event.affectedFiles, tests: event.tests, edges: event.edges, max_depth: event.maxDepth, blast_radius: event.blastRadius, truncated: event.truncated }
+    case 'verification-repair': return { type: `verification.repair_${event.stage}`, round: event.round, max_rounds: event.maxRounds, revision: event.revision }
     case 'critic-start': return { type: 'critic.started', round: event.round }
     case 'critic-end': return { type: 'critic.completed', round: event.round, model: event.model, status: event.status, findings: event.findings, ...(event.message ? { message: event.message } : {}) }
     case 'steering': return { type: 'steering.applied', count: event.messages.length }
     case 'risk-assessed': return { type: 'risk.assessed', level: event.assessment.level, score: event.assessment.score, reasons: event.assessment.reasons, changed_files: event.assessment.changedFiles, changed_lines: event.assessment.changedLines }
     case 'risk-verification-weak': return { type: 'risk.verification_weak', level: event.assessment.level, reasons: event.assessment.reasons }
+    case 'failure-postmortem': return { type: 'run.postmortem', ...event.report }
     case 'turn-limit': return { type: 'turn.limit', turns: event.turns }
     case 'cancelled': return { type: 'run.cancelled' }
     case 'error': return { type: 'run.error', error: event.message }
@@ -221,8 +226,9 @@ export async function runExec(rawArgs: readonly string[], workspace = process.cw
     return 2
   }
   const config = loadConfig(workspace)
-  if (!config.NINEROUTER_KEY) {
-    stderr.write('NINEROUTER_KEY belum dikonfigurasi. Jalankan `boo-code setup`.\n')
+  const profiles = profilesFromConfig(config)
+  if (!profiles.length) {
+    stderr.write('Belum ada provider yang dikonfigurasi. Jalankan `boo-code setup`.\n')
     return 1
   }
   const requestedModel = options.model ?? config.BOO_MODEL ?? 'auto'
@@ -235,7 +241,7 @@ export async function runExec(rawArgs: readonly string[], workspace = process.cw
   const provider = new NineRouterProvider({
     baseUrl: config.NINEROUTER_URL || DEFAULT_BASE_URL,
     apiKey: config.NINEROUTER_KEY ?? '',
-    profiles: profilesFromConfig(config),
+    profiles,
     model,
     reasoningEffort: effort,
     home: homedir(),

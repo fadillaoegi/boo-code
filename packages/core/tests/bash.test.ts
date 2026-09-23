@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Agent, type AgentEvent } from '../src/agent/loop.ts'
 import type { Message, ToolCall } from '../src/domain/message.ts'
+import { createRegistry, type Tool } from '../src/domain/tool.ts'
 import type { NineRouterProvider } from '../src/provider/nineRouter.ts'
 import { bashTool } from '../src/tools/bash.ts'
 import { bashInputTool, bashKillTool, bashOutputTool, MAX_BACKGROUND_INPUT_CHARACTERS } from '../src/tools/bashOutput.ts'
@@ -86,6 +87,12 @@ test('batas waktu dapat diatur, dan keluaran sejauh ini tetap dilaporkan', async
   assert.ok(Date.now() - started < 4_000, `harus berhenti setelah 1 detik (${Date.now() - started} ms)`)
   assert.equal(result.isError, true)
   assert.match(result.content, /Waktu habis[\s\S]*1 detik[\s\S]*run_in_background[\s\S]*mulai/)
+  assert.deepEqual(result.recovery && {
+    kind: result.recovery.kind,
+    reason: result.recovery.reason,
+    category: result.recovery.category,
+    partialOutput: result.recovery.partialOutput,
+  }, { kind: 'timeout', reason: 'maximum', category: 'general', partialOutput: true })
 })
 
 test('dihentikan pengguna: proses cucu ikut mati', async () => {
@@ -199,4 +206,43 @@ test('agent meneruskan keluaran tool sebagai event sebelum tool selesai', async 
   assert.ok(outputs.length >= 1)
   assert.ok(events.findIndex((event) => event.type === 'tool-output') < end)
   assert.match(outputs.map((event) => event.type === 'tool-output' ? event.chunk : '').join(''), /satu[\s\S]*dua/)
+})
+
+test('agent meneruskan metadata recovery timeout tanpa command atau output', async () => {
+  const tool: Tool<Record<string, never>> = {
+    name: 'slow_check',
+    description: 'test recovery metadata',
+    risk: 'safe',
+    schema: { type: 'function', function: { name: 'slow_check', description: 'test', parameters: { type: 'object', properties: {} } } },
+    preview: () => 'slow check',
+    async run() {
+      return {
+        content: 'timeout with private output',
+        isError: true,
+        recovery: {
+          kind: 'timeout', reason: 'idle', category: 'test', durationMs: 100,
+          idleTimeoutMs: 100, maximumTimeoutMs: 500, nextIdleTimeoutMs: 200, partialOutput: true,
+        },
+      }
+    },
+  }
+  let turn = 0
+  const provider = {
+    model: 'palsu',
+    stream() {
+      turn += 1
+      const message: Message = turn === 1
+        ? { role: 'assistant', content: null, tool_calls: [{ id: 'recovery-1', type: 'function', function: { name: 'slow_check', arguments: '{}' } }] }
+        : { role: 'assistant', content: 'selesai' }
+      // eslint-disable-next-line require-yield
+      return (async function* reply() { return { finishReason: turn === 1 ? 'tool_calls' : 'stop', message } })()
+    },
+  } as unknown as NineRouterProvider
+  const agent = new Agent({ provider, registry: createRegistry([tool]), workspace, askPermission: async () => true })
+  const events: AgentEvent[] = []
+  for await (const event of agent.send('cek')) events.push(event)
+  const recovery = events.find((event) => event.type === 'tool-recovery')
+  assert.ok(recovery && recovery.type === 'tool-recovery')
+  assert.equal(recovery.nextIdleTimeoutMs, 200)
+  assert.equal('content' in recovery, false)
 })

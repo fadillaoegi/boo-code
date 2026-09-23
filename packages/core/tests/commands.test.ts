@@ -28,6 +28,8 @@ test('command proyek menimpa global, subfolder menjadi namespace, reserved diaba
   command(join(root, '.boo', 'commands'), 'quality/release', '# Release check\nPeriksa rilis.')
   command(join(root, '.boo', 'commands'), 'help', 'Tidak boleh menimpa help.')
   command(join(root, '.boo', 'commands'), 'attach', 'Tidak boleh menimpa attachment bawaan.')
+  command(join(root, '.boo', 'commands'), 'capabilities', 'Tidak boleh menimpa capability inspector.')
+  command(join(root, '.boo', 'commands'), 'postmortem', 'Tidak boleh menimpa postmortem bawaan.')
 
   const commands = loadPromptCommands({ workspace, home })
   assert.deepEqual(commands.map(({ name, source }) => [name, source]), [

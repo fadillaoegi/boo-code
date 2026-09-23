@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Agent, CANCELLED_REPLY, type AgentEvent } from '../src/agent/loop.ts'
 import { createRegistry } from '../src/domain/tool.ts'
 import type { Message } from '../src/domain/message.ts'
 import { assessLocally, AutoModelRouter, parseAssessment, selectAutoModel } from '../src/provider/auto.ts'
 import { NineRouterProvider } from '../src/provider/nineRouter.ts'
 import type { AutoPerformanceProfile } from '../src/provider/performance.ts'
+import { loadProviderCapabilityProfile, updateProviderCapabilityProfile } from '../src/provider/capabilities.ts'
 
 const IDS = ['ag/gemini-3.7-flash-low', 'ag/gemini-3.7-flash-medium', 'ag/gemini-3.7-flash-high', 'ag/gemini-3.1-pro', 'cx/gpt-5.6-sol', 'ag/claude-opus-4-6-thinking']
 
@@ -46,8 +50,8 @@ function fakeProvider(options: { assessments?: string[]; discoveryError?: boolea
   return { provider, selections, judges, discoveries: () => discoveries }
 }
 
-function createAgent(provider: NineRouterProvider, mode: 'auto' | 'manual' = 'auto') {
-  return new Agent({ provider, modelMode: mode, workspace: '/unused', registry: createRegistry([]), askPermission: async () => true })
+function createAgent(provider: NineRouterProvider, mode: 'auto' | 'manual' = 'auto', home?: string) {
+  return new Agent({ provider, modelMode: mode, workspace: '/unused', registry: createRegistry([]), askPermission: async () => true, home })
 }
 
 async function collect(events: AsyncGenerator<AgentEvent>): Promise<AgentEvent[]> {
@@ -85,6 +89,20 @@ test('Auto memakai profil eval yang cukup kuat dan tetap menampilkan alasannya',
   assert.equal(selected.routingPolicy, 'evaluation')
   assert.equal(selected.performanceSamples, 4)
   assert.match(selected.reason, /Profil eval lokal/)
+})
+
+test('Auto menghindari model berdasarkan capability yang dipelajari lokal', async () => {
+  const now = 50_000
+  const capabilities = updateProviderCapabilityProfile(null, { kind: 'unavailable', model: 'ag/gemini-3.1-pro' }, now)
+  const fake = fakeProvider()
+  const selected = await new AutoModelRouter({ capabilities, now: () => now }).route(
+    fake.provider, 'Buat fitur rutin', [], undefined, { tools: true, reasoning: true },
+  )
+  assert.equal(selected.model, 'cx/gpt-5.6-sol')
+  assert.equal(selected.routingPolicy, 'capability')
+  assert.equal(selected.capabilityAvoided, 1)
+  assert.equal(selected.capabilitySamples, 1)
+  assert.match(selected.reason, /Profil capability lokal/)
 })
 
 test('penilai menerima JSON terbatas, bukan model/effort arbitrer; teks panjang tidak otomatis berat', () => {
@@ -161,7 +179,8 @@ test('penilai gagal memakai fallback lokal; discovery gagal memakai model terakh
 
 test('Auto mengarantina model 404 lalu melanjutkan task dengan model cadangan', async () => {
   const fake = fakeProvider({ failModels: ['ag/gemini-3.1-pro'] })
-  const agent = createAgent(fake.provider)
+  const home = mkdtempSync(join(tmpdir(), 'boo-auto-capability-'))
+  const agent = createAgent(fake.provider, 'auto', home)
   const events = await collect(agent.send('Buat fitur rutin'))
   const selected = events.filter((event): event is Extract<AgentEvent, { type: 'model-selected' }> => event.type === 'model-selected')
   assert.equal(selected.length, 2)
@@ -170,6 +189,9 @@ test('Auto mengarantina model 404 lalu melanjutkan task dengan model cadangan', 
   assert.equal(fake.selections.at(-1)?.model, 'cx/gpt-5.6-sol')
   assert.match(selected[1].reason, /ditolak upstream/)
   assert.equal(agent.history.at(-1)?.content, 'selesai')
+  const learned = loadProviderCapabilityProfile(home)
+  assert.equal(learned?.models.find((item) => item.model === 'ag/gemini-3.1-pro')?.availability.unsupported, 1)
+  assert.equal(learned?.models.find((item) => item.model === 'cx/gpt-5.6-sol')?.availability.successes, 1)
 })
 
 test('Auto memberi sinyal multimodal ke penilai dan pindah bila model menolak gambar', async () => {
@@ -183,6 +205,8 @@ test('Auto memberi sinyal multimodal ke penilai dan pindah bila model menolak ga
   assert.equal(selected[1].model, 'cx/gpt-5.6-sol')
   assert.match(fake.judges[0][1].content ?? '', /image attachment/)
   assert.equal(agent.history.at(-1)?.content, 'selesai')
+  const next = await collect(agent.send('Buat fitur rutin'))
+  assert.ok(next.some((event) => event.type === 'model-selected' && event.model === 'ag/gemini-3.1-pro'), 'model text-only boleh dipakai lagi untuk task tanpa gambar')
 })
 
 test('daftar kosong tidak mengirim model auto sebagai id upstream dan riwayat tetap sah', async () => {

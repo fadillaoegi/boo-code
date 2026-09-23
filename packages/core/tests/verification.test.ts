@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Agent, type AgentEvent } from '../src/agent/loop.ts'
 import { CHANGE_RISK_VERIFICATION_MARK, isVerificationCommand } from '../src/agent/verification.ts'
+import { MAX_VERIFICATION_REPAIR_ROUNDS, VERIFICATION_REPAIR_MARK } from '../src/agent/verificationRepair.ts'
 import type { Message, ToolCall } from '../src/domain/message.ts'
 import { createRegistry, type Tool, type ToolRegistry } from '../src/domain/tool.ts'
 import type { NineRouterProvider } from '../src/provider/nineRouter.ts'
@@ -74,6 +75,7 @@ test('pengingat menyertakan test terdampak dan command yang terdeteksi', async (
   mkdirSync(join(workspace, 'src'))
   writeFileSync(join(workspace, 'src', 'cart.ts'), 'export const total = 1\n')
   writeFileSync(join(workspace, 'src', 'cart.test.ts'), "import { total } from './cart'\nvoid total\n")
+  writeFileSync(join(workspace, 'src', 'cartView.ts'), "import { total } from './cart'\nexport const label = String(total)\n")
   writeFileSync(join(workspace, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }))
   const seen: Message[][] = []
   const agent = new Agent({
@@ -89,7 +91,13 @@ test('pengingat menyertakan test terdampak dan command yang terdeteksi', async (
   const needed = events.find((event): event is Extract<AgentEvent, { type: 'verification-needed' }> => event.type === 'verification-needed')
   assert.deepEqual(needed?.tests, ['src/cart.test.ts'])
   assert.deepEqual(needed?.commands, ['npm run test'])
+  const impact = events.find((event): event is Extract<AgentEvent, { type: 'change-impact' }> => event.type === 'change-impact')
+  assert.equal(impact?.changedFiles, 1)
+  assert.equal(impact?.affectedFiles, 2)
+  assert.equal(impact?.tests, 1)
+  assert.equal(impact?.blastRadius, 'small')
   const reminder = seen[1].find((message) => message.role === 'system' && /Completion verification/.test(message.content ?? ''))?.content ?? ''
+  assert.match(reminder, /Graph dampak small: src\/cartView\.ts \(depth 1\)/)
   assert.match(reminder, /Test terkait yang ditemukan: src\/cart\.test\.ts/)
   assert.match(reminder, /npm run test/)
   assert.match(reminder, /belum dijalankan/)
@@ -106,14 +114,35 @@ test('kesimpulan tanpa pemeriksaan ditandai sebagai belum terverifikasi', async 
 })
 
 test('pemeriksaan gagal tidak dianggap sebagai bukti keberhasilan', async () => {
+  const seen: Message[][] = []
   const { events } = await run([
     { role: 'assistant', content: null, tool_calls: [call('w', 'write_file', { path: 'app.js', content: 'const value = 1\n' })] },
     { role: 'assistant', content: null, tool_calls: [call('v', 'bash', { command: 'node --check tidak-ada.js' })] },
     { role: 'assistant', content: 'Saya berhenti.' },
-  ])
+  ], seen)
 
   const incomplete = events.find((event): event is Extract<AgentEvent, { type: 'verification-incomplete' }> => event.type === 'verification-incomplete')
   assert.equal(incomplete?.attempted, true)
+  const repairs = events.filter((event): event is Extract<AgentEvent, { type: 'verification-repair' }> => event.type === 'verification-repair')
+  assert.deepEqual(repairs.map((event) => event.stage), ['needed', 'retrying', 'retrying', 'exhausted'])
+  assert.equal(repairs.find((event) => event.stage === 'exhausted')?.round, MAX_VERIFICATION_REPAIR_ROUNDS)
+  assert.ok(seen[2].some((message) => message.role === 'system' && message.content?.startsWith(VERIFICATION_REPAIR_MARK)))
+})
+
+test('loop repair memperbaiki source lalu menutup setelah verifikasi ulang sukses', async () => {
+  const seen: Message[][] = []
+  const { events } = await run([
+    { role: 'assistant', content: null, tool_calls: [call('w', 'write_file', { path: 'app.js', content: 'const value = ;\n' })] },
+    { role: 'assistant', content: null, tool_calls: [call('bad', 'bash', { command: 'node --check app.js' })] },
+    { role: 'assistant', content: null, tool_calls: [call('fix', 'edit_file', { path: 'app.js', old_text: 'const value = ;', new_text: 'const value = 1;' })] },
+    { role: 'assistant', content: null, tool_calls: [call('good', 'bash', { command: 'node --check app.js' })] },
+    { role: 'assistant', content: 'Selesai setelah diperbaiki.' },
+  ], seen)
+
+  assert.deepEqual(events.filter((event) => event.type === 'verification-repair').map((event) => event.stage), ['needed', 'repaired'])
+  assert.equal(events.some((event) => event.type === 'verification-incomplete'), false)
+  assert.ok(seen[2].some((message) => message.role === 'system' && message.content?.startsWith(VERIFICATION_REPAIR_MARK)))
+  assert.ok(seen[3].some((message) => message.role === 'system' && /belum lolos verifikasi ulang/i.test(message.content ?? '')))
 })
 
 test('edit setelah test mewajibkan verifikasi ulang', async () => {

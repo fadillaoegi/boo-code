@@ -1,5 +1,6 @@
 let buffer = Buffer.alloc(0)
 let openedUri = ''
+let documentVersion = 0
 
 function send(message) {
   const body = JSON.stringify({ jsonrpc: '2.0', ...message })
@@ -13,10 +14,17 @@ function handle(message) {
   }
   if (message.method === 'textDocument/didOpen') {
     openedUri = message.params.textDocument.uri
+    documentVersion = message.params.textDocument.version
     send({ method: 'textDocument/publishDiagnostics', params: {
       uri: openedUri,
       diagnostics: [{ range: { start: { line: 2, character: 4 }, end: { line: 2, character: 9 } }, severity: 1, code: 'FAKE1', source: 'fake-lsp', message: 'Contoh error semantic.' }],
     } })
+    return
+  }
+  if (message.method === 'textDocument/didChange') {
+    documentVersion = message.params.textDocument.version
+    const content = message.params.contentChanges?.[0]?.text ?? ''
+    if (content.includes('CRASH_ON_CHANGE')) process.exit(23)
     return
   }
   if (message.method === 'textDocument/documentSymbol') {
@@ -35,7 +43,7 @@ function handle(message) {
     return
   }
   if (message.method === 'textDocument/hover') {
-    send({ id: message.id, result: { contents: { kind: 'markdown', value: '```ts\n(method) Worker.run(): void\n```' } } })
+    send({ id: message.id, result: { contents: { kind: 'markdown', value: `\`\`\`ts\n(method) Worker.run(): void\n\`\`\`\nversion=${documentVersion}` } } })
     return
   }
   if (message.method === 'textDocument/diagnostic') {

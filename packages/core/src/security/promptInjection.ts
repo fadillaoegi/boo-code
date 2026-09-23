@@ -27,7 +27,7 @@ const MAX_SCAN_CHARACTERS = 120_000
 const SOURCE_BY_TOOL: Record<string, UntrustedDataSource> = {
   workspace_reference: 'workspace',
   read_file: 'workspace', list_dir: 'workspace', glob: 'workspace', grep: 'workspace',
-  code_search: 'workspace', repo_map: 'workspace', test_impact: 'workspace',
+  code_search: 'workspace', repo_map: 'workspace', change_impact: 'workspace', test_impact: 'workspace',
   git_status: 'workspace', git_changed_files: 'workspace', git_diff: 'workspace',
   git_log: 'workspace', git_show: 'workspace', git_blame: 'workspace', lsp: 'workspace',
   web_search: 'web', web_fetch: 'web',

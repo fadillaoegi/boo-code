@@ -4,8 +4,8 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { evaluateAgentRun, summarizeAgentRun } from '../src/eval/harness.ts'
-import { compareEvalBaseline, createEvalBaseline, createEvalRunReport, parseEvalBaseline, parseEvalSuite, selectEvalCases, validateEvalFixtures } from '../src/eval/benchmark.ts'
+import { createEvalWorkspaceSnapshot, evaluateAgentRun, summarizeAgentRun } from '../src/eval/harness.ts'
+import { compareEvalBaseline, createEvalBaseline, createEvalRunReport, parseEvalBaseline, parseEvalSuite, selectEvalCases, validateEvalCoverage, validateEvalFixtures } from '../src/eval/benchmark.ts'
 import type { AgentEvent } from '../src/agent/loop.ts'
 
 const events: AgentEvent[] = [
@@ -14,9 +14,15 @@ const events: AgentEvent[] = [
   { type: 'tool-end', name: 'edit_file', callId: '1', content: 'ok', isError: false, cancelled: false },
   { type: 'turn-start', turn: 1 },
   { type: 'verification-needed', files: ['app.js'] },
+  { type: 'change-impact', changedFiles: 1, affectedFiles: 3, tests: 1, edges: 4, maxDepth: 2, blastRadius: 'small', truncated: false },
+  { type: 'lsp-session', stage: 'started', openDocuments: 1 },
+  { type: 'lsp-session', stage: 'reused', openDocuments: 2 },
+  { type: 'verification-repair', stage: 'needed', round: 1, maxRounds: 3, revision: 1 },
   { type: 'tool-start', name: 'bash', preview: 'node --test', callId: '2', args: {} },
   { type: 'tool-end', name: 'bash', callId: '2', content: 'ok', isError: false, cancelled: false },
+  { type: 'verification-repair', stage: 'repaired', round: 1, maxRounds: 3, revision: 1 },
   { type: 'turn-start', turn: 2 },
+  { type: 'context-trimmed', droppedMessages: 4, estimatedTokens: 900, prioritizedMessages: 2, dependencyMessages: 3, dependencyEdges: 2 },
   { type: 'text', delta: 'Selesai dan test lulus.' },
 ]
 
@@ -29,6 +35,18 @@ test('ringkasan eval menghitung turn, tool, kegagalan, dan verifikasi', () => {
     tools: { edit_file: 1, bash: 1 },
     verificationRequested: true,
     verificationIncomplete: false,
+    verificationRepairRounds: 1,
+    verificationRepairs: 1,
+    verificationRepairExhausted: 0,
+    changeImpactAnalyses: 1,
+    changeImpactAffectedFiles: 3,
+    changeImpactEdges: 4,
+    changeImpactLarge: 0,
+    lspSessionStarts: 1,
+    lspSessionReuses: 1,
+    lspSessionRestarts: 0,
+    contextDependencyMessages: 3,
+    contextDependencyEdges: 2,
   })
 })
 
@@ -59,6 +77,36 @@ test('eval gagal bila file atau bukti verifikasi tidak sesuai', () => {
   })
   assert.equal(result.passed, false)
   assert.equal(result.score, 0)
+})
+
+test('eval mengunci file yang boleh berubah berdasarkan snapshot awal', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'boo-eval-changes-'))
+  writeFileSync(join(workspace, 'app.js'), 'old\n')
+  writeFileSync(join(workspace, 'app.test.js'), 'do not edit\n')
+  const before = createEvalWorkspaceSnapshot(workspace)
+  writeFileSync(join(workspace, 'app.js'), 'fixed\n')
+
+  const passing = evaluateAgentRun(workspace, events, {
+    requiredChangedFiles: ['app.js'],
+    allowedChangedFiles: ['app.js'],
+    forbiddenChangedFiles: ['app.test.js'],
+    maxChangedFiles: 1,
+    answerNotContains: 'gagal',
+  }, before)
+  assert.equal(passing.passed, true)
+  assert.deepEqual(passing.metrics.changedFiles, ['app.js'])
+
+  writeFileSync(join(workspace, 'unexpected.txt'), 'shortcut\n')
+  const failing = evaluateAgentRun(workspace, events, { allowedChangedFiles: ['app.js'] }, before)
+  assert.equal(failing.passed, false)
+  assert.match(failing.checks.find((check) => check.name === 'changed-files:allowed')?.detail ?? '', /unexpected\.txt/)
+})
+
+test('kontrak perubahan gagal aman tanpa snapshot awal', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'boo-eval-no-snapshot-'))
+  const result = evaluateAgentRun(workspace, events, { allowedChangedFiles: [] })
+  assert.equal(result.passed, false)
+  assert.equal(result.checks[0]?.name, 'changed-files:snapshot')
 })
 
 const validSuite = () => ({
@@ -95,6 +143,25 @@ test('schema benchmark dinormalisasi dan menolak ID duplikat atau expectation ko
   Object.assign(empty.cases[0], { expect: {} })
   assert.throws(() => parseEvalSuite(empty), /minimal satu pemeriksaan/)
   assert.throws(() => parseEvalSuite({ ...validSuite(), typo: true }), /field tidak dikenal: typo/)
+  const noChanges = validSuite()
+  Object.assign(noChanges.cases[0], { expect: { allowedChangedFiles: [], maxChangedFiles: 0 } })
+  assert.deepEqual(parseEvalSuite(noChanges).cases[0].expect, { allowedChangedFiles: [], maxChangedFiles: 0 })
+})
+
+test('coverage suite melaporkan kategori dan difficulty yang belum terwakili', () => {
+  const suite = parseEvalSuite({
+    ...validSuite(),
+    coverage: {
+      minCases: 3,
+      requiredTags: ['debugging', 'security'],
+      requiredDifficulties: ['standard', 'expert'],
+    },
+  })
+  assert.deepEqual(validateEvalCoverage(suite), [
+    'jumlah kasus 2, minimum 3',
+    'tag wajib belum tercakup: security',
+    'difficulty wajib belum tercakup: standard, expert',
+  ])
 })
 
 test('filter kasus menggabungkan id dan tag dengan aman', () => {

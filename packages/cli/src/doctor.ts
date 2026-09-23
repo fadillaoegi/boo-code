@@ -4,7 +4,7 @@ import { constants } from 'node:fs'
 import { access, stat } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { homedir } from 'node:os'
-import { browserStatus, NineRouterProvider, profilesFromConfig, splitModelId, type SandboxStatus } from '@boo/core'
+import { browserStatus, loadComputerBridge, loadRemoteNodes, loadSchedules, NineRouterProvider, profilesFromConfig, splitModelId, type SandboxStatus } from '@boo/core'
 
 export type DoctorCheckStatus = 'pass' | 'warn' | 'fail'
 
@@ -177,9 +177,23 @@ export async function diagnoseBoo(options: DoctorOptions, dependencies: DoctorDe
     checks.push(warn('sandbox', 'Sandbox command', `${options.sandbox.mode} tidak enforced${options.sandbox.reason ? `: ${clean(options.sandbox.reason)}` : ''}`))
   }
 
+  const home = options.home ?? homedir()
+  const computer = loadComputerBridge(home, platform)
+  checks.push(computer
+    ? pass('computer-use', 'Computer use native', `bridge ${platform} terdaftar; izin accessibility tetap diperiksa saat dipakai`)
+    : pass('computer-use', 'Computer use native', `opsional; bridge ${platform} belum terdaftar di ~/.boo/computer.json`))
+  const schedules = loadSchedules(home).jobs
+  checks.push(schedules.length
+    ? pass('scheduler', 'Background scheduler', `${schedules.filter((job) => job.enabled).length}/${schedules.length} task aktif; jalankan boo-code daemon`)
+    : pass('scheduler', 'Background scheduler', 'siap; belum ada task terjadwal'))
+  const nodes = loadRemoteNodes(home).nodes
+  checks.push(nodes.length
+    ? pass('remote-nodes', 'Remote device nodes', `${nodes.length} node dipasangkan; token tidak ditampilkan`)
+    : pass('remote-nodes', 'Remote device nodes', 'siap; belum ada node dipasangkan'))
+
   try {
     const browser = dependencies.browser ?? ((home: string) => browserStatus(home))
-    checks.push(pass('browser', 'Browser CDP opsional', clean(await browser(options.home ?? homedir()))))
+    checks.push(pass('browser', 'Browser CDP opsional', clean(await browser(home))))
   } catch (error) {
     checks.push(warn('browser', 'Browser CDP opsional', clean(error instanceof Error ? error.message : 'tidak aktif')))
   }

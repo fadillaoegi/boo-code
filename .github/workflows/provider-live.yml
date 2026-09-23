@@ -1,0 +1,55 @@
+name: Live provider qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider id (ninerouter, openai, anthropic, openrouter, ollama, custom)
+        required: true
+        type: string
+      model:
+        description: Exact provider model id; blank selects the first listed model
+        required: false
+        type: string
+      tools:
+        description: Require one real function call
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    environment: provider-live
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Qualify configured provider
+        env:
+          NINEROUTER_URL: ${{ secrets.NINEROUTER_URL }}
+          NINEROUTER_KEY: ${{ secrets.NINEROUTER_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+          CUSTOM_API_URL: ${{ secrets.CUSTOM_API_URL }}
+          CUSTOM_API_KEY: ${{ secrets.CUSTOM_API_KEY }}
+          LIVE_PROVIDER: ${{ inputs.provider }}
+          LIVE_MODEL: ${{ inputs.model }}
+          LIVE_TOOLS: ${{ inputs.tools }}
+        shell: bash
+        run: |
+          args=(--provider "$LIVE_PROVIDER" --json)
+          if [[ -n "$LIVE_MODEL" ]]; then args+=(--model "$LIVE_MODEL"); fi
+          if [[ "$LIVE_TOOLS" == "true" ]]; then args+=(--tools); fi
+          node scripts/provider-live.ts "${args[@]}"

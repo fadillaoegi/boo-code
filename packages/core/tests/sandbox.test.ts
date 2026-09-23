@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
 import { commandEnvironment, resolveShell, runCommand } from '../src/tools/shell.ts'
 import { inspectSandbox, resolveSandboxPolicy, sandboxLaunch } from '../src/tools/sandbox.ts'
+import {
+  encodeWindowsSandboxConfig,
+  probeWindowsSandbox,
+  quoteWindowsArgument,
+  resolveWindowsSandboxExecutable,
+  windowsSandboxConfig,
+  windowsToolPaths,
+} from '../src/tools/windowsSandbox.ts'
 import { Agent, type AgentEvent } from '../src/agent/loop.ts'
 import type { Message, ToolCall } from '../src/domain/message.ts'
 import type { NineRouterProvider } from '../src/provider/nineRouter.ts'
@@ -50,12 +58,78 @@ test('platform tanpa backend melaporkan fallback, bukan mengaku sandbox aktif', 
   const linux = sandboxLaunch(shell, 'echo ok', process.cwd(), { mode: 'workspace-write' }, 'linux', () => false)
   assert.equal(linux.status.enforced, false)
   assert.match(linux.status.reason ?? '', /bwrap/)
-  const windows = sandboxLaunch({ file: 'cmd.exe', name: 'cmd', args: () => [] }, '', process.cwd(), { mode: 'read-only' }, 'win32')
+  const windows = sandboxLaunch({ file: 'cmd.exe', name: 'cmd', args: () => [] }, '', process.cwd(), { mode: 'read-only' }, 'win32', () => false)
   assert.equal(windows.status.enforced, false)
-  assert.match(windows.status.reason ?? '', /Windows/)
+  assert.match(windows.status.reason ?? '', /MXC|wxc-exec/)
   const disabled = inspectSandbox(process.cwd(), { mode: 'danger-full-access' }, 'darwin')
   assert.equal(disabled.backend, 'none')
   assert.equal(disabled.enforced, false)
+})
+
+test('launcher Windows memakai MXC AppContainer dengan config base64 fail-closed', () => {
+  const windowsShell = { file: 'C:\\Windows\\System32\\cmd.exe', name: 'cmd', args: (command: string) => ['/d', '/s', '/c', `"${command}"`] }
+  const environment = commandEnvironment({
+    Path: 'C:\\Program Files\\nodejs;C:\\Tools',
+    TEMP: 'C:\\Users\\boo\\AppData\\Local\\Temp',
+    OPENAI_API_KEY: 'jangan-bocor',
+  })
+  const exists = (path: string) => /wxc-exec\.exe$|\\\.git$|nodejs$|Tools$/.test(path)
+  const launch = sandboxLaunch(windowsShell, 'echo "aman"', 'C:\\repo', { mode: 'workspace-write' }, 'win32', exists, environment)
+
+  assert.equal(launch.status.backend, 'windows-appcontainer')
+  assert.equal(launch.status.enforced, true)
+  assert.equal(launch.args[0], '--config-base64')
+  const config = JSON.parse(Buffer.from(launch.args[1], 'base64').toString('utf8'))
+  assert.equal(config.containment, 'processcontainer')
+  assert.deepEqual(config.filesystem.readwritePaths.slice(0, 1), ['C:\\repo'])
+  assert.ok(config.filesystem.deniedPaths.includes('C:\\repo\\.git'))
+  assert.equal(config.network.defaultPolicy, 'block')
+  assert.deepEqual(config.processContainer.capabilities, [])
+  assert.doesNotMatch(config.process.env.join('\n'), /jangan-bocor|OPENAI_API_KEY/)
+  assert.match(config.process.commandLine, /cmd\.exe[\s\S]*\/c/)
+})
+
+test('config Windows membedakan read-only, network, path tool, dan argument quoting', () => {
+  const windowsShell = { file: 'C:\\Windows\\System32\\cmd.exe', name: 'cmd', args: (command: string) => ['/d', '/s', '/c', `"${command}"`] }
+  const environment = { Path: 'C:\\Program Files\\nodejs;C:\\Tools', LANG: 'id_ID.UTF-8' }
+  const existing = new Set(['C:\\Program Files\\nodejs', 'C:\\Tools', 'C:\\repo\\.boo'])
+  const exists = (path: string) => existing.has(path)
+  const config = windowsSandboxConfig(
+    windowsShell,
+    'node -e "console.log(1)"',
+    'C:\\repo',
+    { mode: 'read-only', networkAccess: true },
+    environment,
+    'C:\\Temp\\boo-sandbox',
+    exists,
+  )
+
+  assert.deepEqual(config.filesystem.readwritePaths, ['C:\\Temp\\boo-sandbox'])
+  assert.ok(config.filesystem.readonlyPaths.includes('C:\\repo'))
+  assert.ok(config.filesystem.readonlyPaths.includes('C:\\Program Files\\nodejs'))
+  assert.deepEqual(config.filesystem.deniedPaths, ['C:\\repo\\.boo'])
+  assert.equal(config.network.defaultPolicy, 'allow')
+  assert.deepEqual(config.processContainer.capabilities, ['internetClient', 'privateNetworkClientServer'])
+  assert.equal(config.ui.disable, true)
+  assert.ok(encodeWindowsSandboxConfig(config).length > 100)
+  assert.equal(quoteWindowsArgument('C:\\Program Files\\node.exe'), '"C:\\Program Files\\node.exe"')
+  assert.deepEqual(windowsToolPaths(windowsShell, environment, 'C:\\Program Files\\nodejs\\node.exe', exists), ['C:\\Program Files\\nodejs', 'C:\\Tools'])
+})
+
+test('resolver Windows memilih binary per arsitektur dan menolak arsitektur asing', () => {
+  const expected = join('/sdk', 'bin', 'arm64', 'wxc-exec.exe')
+  assert.deepEqual(resolveWindowsSandboxExecutable({}, 'arm64', (path) => path === expected, '/sdk'), { executable: expected })
+  assert.match(resolveWindowsSandboxExecutable({}, 'ia32', () => true, '/sdk').reason ?? '', /belum didukung/)
+})
+
+test('probe Windows hanya menerima isolation tier native yang sah', () => {
+  const supported = probeWindowsSandbox('wxc-exec.exe', () => ({
+    status: 0,
+    stdout: JSON.stringify({ tier: 'appcontainer-dacl', warnings: [] }),
+  }), false)
+  assert.deepEqual(supported, { supported: true, tier: 'appcontainer-dacl' })
+  assert.equal(probeWindowsSandbox('wxc-exec.exe', () => ({ status: 1, stderr: 'unsupported host' }), false).supported, false)
+  assert.equal(probeWindowsSandbox('wxc-exec.exe', () => ({ status: 0, stdout: '{}' }), false).supported, false)
 })
 
 test('environment command membuang credential tetapi mempertahankan kebutuhan proses', () => {
@@ -173,5 +247,50 @@ test('Seatbelt memblokir network secara bawaan dan membukanya hanya saat diminta
     assert.equal(allowed.exitCode, 0, allowed.output)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+test('Windows AppContainer mengizinkan write workspace tetapi melindungi metadata dan sibling', {
+  skip: process.platform !== 'win32' || !inspectSandbox(process.cwd(), { mode: 'workspace-write' }).enforced,
+}, async () => {
+  const workspace = mkdtempSync(join(process.cwd(), '.sandbox-win-live-'))
+  const inside = join(workspace, 'inside.txt')
+  const sibling = `${workspace}-outside.txt`
+  const protectedFile = join(workspace, '.git', 'config')
+  mkdirSync(join(workspace, '.git'))
+  writeFileSync(protectedFile, 'aman\n')
+  try {
+    const result = await runCommand(`echo ok>"${inside}" & echo no>"${sibling}" & echo rusak>"${protectedFile}"`, {
+      cwd: workspace,
+      shell: resolveShell(),
+      sandbox: { mode: 'workspace-write' },
+      timeoutMs: 10_000,
+    })
+    assert.equal(result.sandbox.backend, 'windows-appcontainer')
+    assert.equal(existsSync(inside), true, result.output)
+    assert.equal(existsSync(sibling), false, result.output)
+    assert.equal(readFileSync(protectedFile, 'utf8'), 'aman\n')
+  } finally {
+    rmSync(workspace, { recursive: true, force: true })
+    rmSync(sibling, { force: true })
+  }
+})
+
+test('Windows AppContainer read-only menolak write workspace', {
+  skip: process.platform !== 'win32' || !inspectSandbox(process.cwd(), { mode: 'read-only' }).enforced,
+}, async () => {
+  const workspace = mkdtempSync(join(process.cwd(), '.sandbox-win-readonly-'))
+  const target = join(workspace, 'blocked.txt')
+  try {
+    const result = await runCommand(`echo no>"${target}"`, {
+      cwd: workspace,
+      shell: resolveShell(),
+      sandbox: { mode: 'read-only' },
+      timeoutMs: 10_000,
+    })
+    assert.equal(result.sandbox.backend, 'windows-appcontainer')
+    assert.equal(existsSync(target), false, result.output)
+  } finally {
+    rmSync(workspace, { recursive: true, force: true })
   }
 })

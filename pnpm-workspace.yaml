@@ -3,3 +3,5 @@ packages:
 allowBuilds:
   # Postinstall esbuild hanya memeriksa biner platformnya.
   esbuild: true
+  # Dependency MXC menyertakan jalur PTY opsional; Boo memakai pipe biasa.
+  node-pty: true

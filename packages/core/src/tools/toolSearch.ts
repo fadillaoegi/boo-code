@@ -39,6 +39,7 @@ export interface DiscoverableToolRegistry extends ToolRegistry {
 
 const SEARCH_TERMS: Record<string, string> = {
   code_graph: 'ast syntax graph symbol definition references callers callees inheritance extends implements call hierarchy relasi pemanggil definisi simbol',
+  change_impact: 'change impact graph blast radius affected consumers callers importers inheritance tests perubahan dampak modul terdampak',
   test_impact: 'test testing affected impact dependency verification verify pemeriksaan pengujian terdampak',
   diagnostics: 'diagnostic diagnostics typecheck lint build compile error pemeriksaan diagnosis',
   lsp: 'language server definition references hover symbols type diagnostics definisi referensi simbol',
@@ -52,6 +53,23 @@ const SEARCH_TERMS: Record<string, string> = {
   web_fetch: 'web internet url page article fetch read website halaman baca',
   list_apps: 'desktop application app program installed registered device aplikasi perangkat',
   open_app: 'desktop application app launch open program aplikasi buka jalankan perangkat',
+  computer_status: 'computer use native desktop accessibility ui automation device status aplikasi perangkat',
+  computer_snapshot: 'computer use native desktop accessibility ui snapshot inspect read screen aplikasi perangkat',
+  computer_click: 'computer use native desktop accessibility ui click press activate aplikasi perangkat',
+  computer_type: 'computer use native desktop accessibility ui type input text aplikasi perangkat',
+  computer_press: 'computer use native desktop accessibility ui keyboard key navigation aplikasi perangkat',
+  schedule_list: 'schedule scheduler automation recurring background daemon cron task jadwal otomatis latar',
+  schedule_add: 'schedule scheduler automation recurring background daemon cron task add create jadwal otomatis tambah',
+  schedule_remove: 'schedule scheduler automation recurring background daemon cron task remove delete jadwal otomatis hapus',
+  trigger_list: 'event trigger automation file change git commit webhook custom ci daemon list pemicu perubahan',
+  trigger_add: 'event trigger automation file change git commit custom ci daemon create add pemicu perubahan tambah',
+  trigger_remove: 'event trigger automation file change git commit webhook custom ci daemon remove delete pemicu hapus',
+  remote_node_list: 'remote device node paired computer list perangkat jarak jauh',
+  remote_node_status: 'remote device node paired computer status check perangkat jarak jauh',
+  remote_node_snapshot: 'remote device node paired computer native ui snapshot accessibility perangkat jarak jauh',
+  remote_node_click: 'remote device node paired computer native ui click perangkat jarak jauh',
+  remote_node_type: 'remote device node paired computer native ui type text perangkat jarak jauh',
+  remote_node_press: 'remote device node paired computer native ui key press perangkat jarak jauh',
   whatsapp_status: 'whatsapp wa web chat message status login pesan',
   whatsapp_send_message: 'whatsapp wa web chat send message contact kirim pesan kontak',
   delegate: 'subagent sub-agent parallel investigate research delegate delegasi paralel investigasi',
@@ -143,7 +161,7 @@ export function createDiscoverableRegistry(tools: readonly Tool[], options: Disc
       type: 'function',
       function: {
         name: 'tool_search',
-        description: 'Search and activate specialized Boo tools. Examples: "browser interaction", "git history", "project diagnostics", "WhatsApp message", or "MCP integration".',
+        description: 'Search and activate specialized Boo tools. Examples: "native computer use", "browser interaction", "git history", "project diagnostics", "WhatsApp message", or "MCP integration".',
         parameters: {
           type: 'object',
           properties: {
@@ -161,7 +179,7 @@ export function createDiscoverableRegistry(tools: readonly Tool[], options: Disc
       const matches = search(args.query, resultLimit(args.max_results))
       if (!matches.length) {
         return {
-          content: 'Tidak ada tool yang cocok. Gunakan capability yang lebih spesifik, misalnya browser, web research, git history, diagnostics, memory, skills, MCP, desktop apps, background process, atau WhatsApp.',
+          content: 'Tidak ada tool yang cocok. Gunakan capability yang lebih spesifik, misalnya native computer use, browser, web research, git history, diagnostics, memory, skills, MCP, desktop apps, background process, atau WhatsApp.',
           isError: true,
         }
       }

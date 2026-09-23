@@ -26,6 +26,7 @@ const manifest = JSON.parse(readFileSync(join(cliDirectory, 'package.json'), 'ut
   description: string
 }
 const workspaceManifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+  dependencies: Record<string, string>
   devDependencies: Record<string, string>
 }
 
@@ -35,7 +36,10 @@ const workspaceManifest = JSON.parse(readFileSync(join(root, 'package.json'), 'u
  * membuat paket berat dan sulit diperbarui. Ia dipasang sebagai dependency biasa
  * dan dimuat saat dibutuhkan; bila hilang, analisis jatuh ke mode fallback.
  */
-const RUNTIME_DEPENDENCIES = { typescript: workspaceManifest.devDependencies.typescript }
+const RUNTIME_DEPENDENCIES = {
+  typescript: workspaceManifest.devDependencies.typescript,
+  '@microsoft/mxc-sdk': workspaceManifest.dependencies['@microsoft/mxc-sdk'],
+}
 
 /** Versi Node terendah yang diuji: fs.glob dan path.matchesGlob stabil tanpa peringatan. */
 const MINIMUM_NODE = '22.12'

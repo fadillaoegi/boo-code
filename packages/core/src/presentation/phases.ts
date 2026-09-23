@@ -55,6 +55,7 @@ export class PhaseTally {
       case 'tool_search':
       case 'code_search':
       case 'code_graph':
+      case 'change_impact':
       case 'test_impact':
       case 'git_status':
       case 'git_changed_files':
@@ -69,6 +70,13 @@ export class PhaseTally {
       case 'browser_tabs':
       case 'browser_snapshot':
       case 'browser_diagnostics':
+      case 'computer_status':
+      case 'computer_snapshot':
+      case 'schedule_list':
+      case 'trigger_list':
+      case 'remote_node_list':
+      case 'remote_node_status':
+      case 'remote_node_snapshot':
       case 'lsp':
       case 'list_skills':
       case 'read_skill':
@@ -130,7 +138,7 @@ export class PhaseTally {
 }
 
 /** Menentukan fase dari nama tool. */
-const EXPLORING_TOOLS = new Set(['read_file', 'read_tool_output', 'list_dir', 'glob', 'grep', 'tool_search', 'code_search', 'code_graph', 'test_impact', 'repo_map', 'web_search', 'web_fetch', 'browser_status', 'browser_tabs', 'browser_snapshot', 'browser_diagnostics', 'git_status', 'git_changed_files', 'git_diff', 'git_log', 'git_show', 'git_blame', 'lsp', 'delegate', 'memory_list', 'list_skills', 'read_skill', 'read_skill_resource', 'list_mcp_servers', 'mcp_list_tools'])
+const EXPLORING_TOOLS = new Set(['read_file', 'read_tool_output', 'list_dir', 'glob', 'grep', 'tool_search', 'code_search', 'code_graph', 'change_impact', 'test_impact', 'repo_map', 'web_search', 'web_fetch', 'browser_status', 'browser_tabs', 'browser_snapshot', 'browser_diagnostics', 'computer_status', 'computer_snapshot', 'schedule_list', 'trigger_list', 'remote_node_list', 'remote_node_status', 'remote_node_snapshot', 'git_status', 'git_changed_files', 'git_diff', 'git_log', 'git_show', 'git_blame', 'lsp', 'delegate', 'memory_list', 'list_skills', 'read_skill', 'read_skill_resource', 'list_mcp_servers', 'mcp_list_tools'])
 
 export function phaseOf(tool: string): Phase {
   return EXPLORING_TOOLS.has(tool) ? 'exploring' : 'applying'

@@ -1,14 +1,16 @@
 /** Analisis test yang terdampak perubahan, berbasis path dan graph import lokal. */
 
 import { access, readFile } from 'node:fs/promises'
-import { basename, dirname, extname, join, posix } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Tool } from '../domain/tool.ts'
-import { resolveIndexedImport, updateRepositoryIndex, type RepositoryIndex } from './codeSearch.ts'
+import { analyzeChangeImpact, type ChangeImpactGraph } from './changeImpact.ts'
+import { normalizeChangedPath } from './impactPaths.ts'
+
+export { conventionalTestCandidates, isTestPath } from './impactPaths.ts'
 
 const MAX_CHANGED_FILES = 100
 const MAX_RELATED_TESTS = 20
 const MAX_COMMANDS = 6
-const MAX_GRAPH_DEPTH = 4
 
 export interface VerificationCommand {
   label: string
@@ -16,13 +18,8 @@ export interface VerificationCommand {
   source: string
 }
 
-export interface VerificationImpact {
-  changedFiles: string[]
-  directTests: string[]
-  dependentTests: string[]
+export interface VerificationImpact extends ChangeImpactGraph {
   commands: VerificationCommand[]
-  indexedFiles: number
-  truncated: boolean
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -31,99 +28,6 @@ async function exists(path: string): Promise<boolean> {
 
 async function text(path: string): Promise<string> {
   try { return await readFile(path, 'utf8') } catch { return '' }
-}
-
-function normalizedPath(value: string): string | undefined {
-  const clean = value.replaceAll('\\', '/').replace(/^\.\//, '')
-  if (!clean || clean.startsWith('/') || clean === '..' || clean.startsWith('../') || clean.includes('/../') || clean.includes('\0')) return undefined
-  return posix.normalize(clean)
-}
-
-export function isTestPath(path: string): boolean {
-  const name = basename(path)
-  return /(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|$)/i.test(path)
-    || /(?:\.test|\.spec)\.[^.]+$/i.test(name)
-    || /(?:_test\.go|_test\.py|_spec\.rb|Test\.(?:java|kt|php|cs)|Tests\.swift)$/i.test(name)
-}
-
-/** Kandidat berbasis konvensi; hanya kandidat yang ada di indeks yang digunakan. */
-export function conventionalTestCandidates(path: string): string[] {
-  const extension = extname(path)
-  if (!extension) return []
-  const directory = dirname(path) === '.' ? '' : dirname(path)
-  const filename = basename(path, extension)
-  const sibling = (name: string) => directory ? `${directory}/${name}` : name
-  const candidates = new Set<string>()
-
-  if (/\.(?:[cm]?[jt]sx?|vue|svelte)$/i.test(extension)) {
-    for (const suffix of ['test', 'spec']) {
-      candidates.add(sibling(`${filename}.${suffix}${extension}`))
-      candidates.add(sibling(`__tests__/${filename}.${suffix}${extension}`))
-    }
-    const relative = path.replace(/^(?:src|lib|app)\//, '')
-    const testDirectory = dirname(relative) === '.' ? '' : `${dirname(relative)}/`
-    const testName = basename(relative, extension)
-    for (const root of ['test', 'tests']) for (const suffix of ['test', 'spec']) candidates.add(`${root}/${testDirectory}${testName}.${suffix}${extension}`)
-  } else if (extension === '.go') {
-    candidates.add(sibling(`${filename}_test.go`))
-  } else if (extension === '.py') {
-    candidates.add(sibling(`test_${filename}.py`))
-    candidates.add(sibling(`${filename}_test.py`))
-    const relative = path.replace(/^(?:src|lib|app)\//, '')
-    const testDirectory = dirname(relative) === '.' ? '' : `${dirname(relative)}/`
-    candidates.add(`tests/${testDirectory}test_${basename(relative, extension)}.py`)
-    candidates.add(`test/${testDirectory}test_${basename(relative, extension)}.py`)
-  } else if (extension === '.dart') {
-    const relative = path.replace(/^lib\//, '')
-    candidates.add(`test/${relative.slice(0, -extension.length)}_test.dart`)
-    candidates.add(sibling(`${filename}_test.dart`))
-  } else if (/\.(?:java|kt|cs|php)$/i.test(extension)) {
-    candidates.add(sibling(`${filename}Test${extension}`))
-    const testTree = path.replace(/^src\/main\//, 'src/test/')
-    candidates.add(`${testTree.slice(0, -extension.length)}Test${extension}`)
-    const relative = path.replace(/^(?:src|app|lib)\//, '')
-    candidates.add(`tests/${relative.slice(0, -extension.length)}Test${extension}`)
-  } else if (extension === '.rb') {
-    candidates.add(sibling(`${filename}_spec.rb`))
-    candidates.add(sibling(`${filename}_test.rb`))
-    const relative = path.replace(/^(?:lib|app)\//, '')
-    candidates.add(`spec/${relative.slice(0, -3)}_spec.rb`)
-    candidates.add(`test/${relative.slice(0, -3)}_test.rb`)
-  } else if (extension === '.rs') {
-    candidates.add(`tests/${filename}.rs`)
-  } else if (extension === '.swift') {
-    candidates.add(sibling(`${filename}Tests.swift`))
-  }
-  return [...candidates]
-}
-
-function reverseDependencyTests(index: RepositoryIndex, changed: ReadonlySet<string>): string[] {
-  const paths = new Set(index.files.map((file) => file.path))
-  const reverse = new Map<string, Set<string>>()
-  for (const file of index.files) {
-    for (const dependency of file.imports) {
-      const target = resolveIndexedImport(file.path, dependency, paths)
-      if (!target) continue
-      const importers = reverse.get(target) ?? new Set<string>()
-      importers.add(file.path)
-      reverse.set(target, importers)
-    }
-  }
-
-  const queue = [...changed].map((path) => ({ path, depth: 0 }))
-  const visited = new Set(changed)
-  const tests = new Set<string>()
-  while (queue.length) {
-    const current = queue.shift()!
-    if (current.depth >= MAX_GRAPH_DEPTH) continue
-    for (const importer of reverse.get(current.path) ?? []) {
-      if (visited.has(importer)) continue
-      visited.add(importer)
-      if (isTestPath(importer)) tests.add(importer)
-      else queue.push({ path: importer, depth: current.depth + 1 })
-    }
-  }
-  return [...tests].sort()
 }
 
 function safePathArgument(path: string): boolean {
@@ -184,24 +88,17 @@ export async function detectProjectTestCommands(workspace: string, changedFiles:
 }
 
 export async function analyzeVerificationImpact(workspace: string, changedFiles: readonly string[], home?: string, signal?: AbortSignal): Promise<VerificationImpact> {
-  const changed = [...new Set(changedFiles.map(normalizedPath).filter((path): path is string => Boolean(path)))].slice(0, MAX_CHANGED_FILES)
-  const update = await updateRepositoryIndex(workspace, home, signal)
-  const indexedPaths = new Set(update.index.files.map((file) => file.path))
-  const direct = new Set<string>()
-  for (const path of changed) {
-    if (isTestPath(path) && indexedPaths.has(path)) direct.add(path)
-    for (const candidate of conventionalTestCandidates(path)) if (indexedPaths.has(candidate)) direct.add(candidate)
-  }
-  const dependent = reverseDependencyTests(update.index, new Set(changed)).filter((path) => !direct.has(path))
-  const allTests = [...direct, ...dependent].slice(0, MAX_RELATED_TESTS)
-  const commands = await detectProjectTestCommands(workspace, changed, allTests)
+  const changed = [...new Set(changedFiles.map(normalizeChangedPath).filter((path): path is string => Boolean(path)))].slice(0, MAX_CHANGED_FILES)
+  const graph = await analyzeChangeImpact(workspace, changed, home, signal)
+  const directTests = graph.directTests.slice(0, MAX_RELATED_TESTS)
+  const dependentTests = graph.dependentTests.slice(0, Math.max(0, MAX_RELATED_TESTS - directTests.length))
+  const commands = await detectProjectTestCommands(workspace, changed, [...directTests, ...dependentTests])
   return {
-    changedFiles: changed,
-    directTests: [...direct].sort().slice(0, MAX_RELATED_TESTS),
-    dependentTests: dependent.slice(0, Math.max(0, MAX_RELATED_TESTS - direct.size)),
+    ...graph,
+    directTests,
+    dependentTests,
     commands,
-    indexedFiles: update.index.files.length,
-    truncated: changedFiles.length > changed.length || direct.size + dependent.length > MAX_RELATED_TESTS,
+    truncated: graph.truncated || graph.directTests.length + graph.dependentTests.length > MAX_RELATED_TESTS,
   }
 }
 

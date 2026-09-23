@@ -10,6 +10,7 @@ import {
   createDefaultRegistry,
   createEvalBaseline,
   createEvalRunReport,
+  createEvalWorkspaceSnapshot,
   evaluateAgentRun,
   loadInstructions,
   loadAutoPerformanceProfile,
@@ -20,6 +21,7 @@ import {
   resolveSandboxPolicy,
   saveAutoPerformanceProfile,
   selectEvalCases,
+  validateEvalCoverage,
   validateEvalFixtures,
   updateAutoPerformanceProfile,
   type AgentEvent,
@@ -137,9 +139,11 @@ async function main(): Promise<void> {
     return
   }
   const fixtureIssues = validateEvalFixtures(suite, options.suitePath)
-  if (fixtureIssues.length) {
-    console.error('Fixture tidak valid:')
-    for (const issue of fixtureIssues) console.error(`  - ${issue}`)
+  const coverageIssues = validateEvalCoverage(suite)
+  if (fixtureIssues.length || coverageIssues.length) {
+    console.error('Suite tidak valid:')
+    for (const issue of fixtureIssues) console.error(`  - fixture: ${issue}`)
+    for (const issue of coverageIssues) console.error(`  - coverage: ${issue}`)
     process.exitCode = 2
     return
   }
@@ -179,6 +183,7 @@ async function main(): Promise<void> {
     const fixture = resolveEvalFixture(options.suitePath, item.fixture)
     const workspace = mkdtempSync(join(tmpdir(), `boo-eval-${item.id.replace(/[^a-z0-9_-]/gi, '-')}-`))
     cpSync(fixture, workspace, { recursive: true })
+    const initialSnapshot = createEvalWorkspaceSnapshot(workspace)
     const caseStarted = Date.now()
     const provider = new NineRouterProvider({
       baseUrl: config.NINEROUTER_URL || 'http://localhost:20128',
@@ -204,7 +209,7 @@ async function main(): Promise<void> {
     const events: AgentEvent[] = []
     try {
       for await (const event of agent.send(item.prompt)) events.push(event)
-      const result = evaluateAgentRun(workspace, events, item.expect)
+      const result = evaluateAgentRun(workspace, events, item.expect, initialSnapshot)
       const metrics = {
         ...result.metrics,
         model: result.metrics.model ?? initialModel,

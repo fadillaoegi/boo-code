@@ -3,6 +3,15 @@ import type { Message } from '../domain/message.ts'
 import { groupModels, type EffortOption } from './models.ts'
 import type { NineRouterProvider } from './nineRouter.ts'
 import { inferPerformanceTags, loadAutoPerformanceProfile, selectByPerformance, type AutoPerformanceProfile, type PerformanceSelection } from './performance.ts'
+import {
+  loadProviderCapabilityProfile,
+  saveProviderCapabilityProfile,
+  selectByCapabilities,
+  updateProviderCapabilityProfile,
+  type ProviderCapabilityObservation,
+  type ProviderCapabilityProfile,
+  type ProviderRequirements,
+} from './capabilities.ts'
 
 export type ModelMode = 'manual' | 'auto'
 export type TaskDifficulty = 'simple' | 'standard' | 'complex' | 'expert'
@@ -14,9 +23,11 @@ export interface TaskAssessment {
 export interface AutoSelection extends TaskAssessment {
   model: string
   reasoningEffort?: string
-  /** Kebijakan statis selalu tersedia; eval hanya dipakai setelah bukti mencukupi. */
-  routingPolicy?: 'static' | 'evaluation'
+  /** Kebijakan statis selalu tersedia; capability/eval hanya dipakai setelah ada bukti lokal. */
+  routingPolicy?: 'static' | 'evaluation' | 'capability'
   performanceSamples?: number
+  capabilitySamples?: number
+  capabilityAvoided?: number
 }
 
 export const DIFFICULTY_LABEL: Record<TaskDifficulty, string> = {
@@ -103,20 +114,71 @@ export class AutoModelRouter {
   private previous: TaskAssessment | undefined
   /** Model yang sudah ditolak upstream dalam sesi ini tidak dicoba lagi oleh Auto. */
   private readonly unavailable = new Set<string>()
-  private readonly options: { home?: string; performance?: AutoPerformanceProfile | null; now?: () => number }
+  /** Ketidakcocokan capability hanya mengarantina model untuk task aktif. */
+  private readonly taskUnavailable = new Set<string>()
+  private readonly options: {
+    home?: string
+    performance?: AutoPerformanceProfile | null
+    capabilities?: ProviderCapabilityProfile | null
+    now?: () => number
+  }
+  private capabilityProfile: ProviderCapabilityProfile | null | undefined
+  private readonly observed = new Set<string>()
+  private requirements: ProviderRequirements = {}
 
-  constructor(options: { home?: string; performance?: AutoPerformanceProfile | null; now?: () => number } = {}) {
+  constructor(options: {
+    home?: string
+    performance?: AutoPerformanceProfile | null
+    capabilities?: ProviderCapabilityProfile | null
+    now?: () => number
+  } = {}) {
     this.options = options
+    this.capabilityProfile = options.capabilities
   }
 
   reset(): void { this.previous = undefined }
+
+  /** Membatasi deduplikasi observasi pada satu task, bukan sepanjang sesi. */
+  beginTask(): void {
+    this.observed.clear()
+    this.taskUnavailable.clear()
+    this.requirements = {}
+  }
+
+  /** Menyimpan sinyal kategorikal saja; API ini sengaja tidak menerima prompt/output. */
+  observe(observation: ProviderCapabilityObservation): void {
+    const key = observation.kind === 'response'
+      ? `${observation.model}:response:${Boolean(observation.tools)}:${Boolean(observation.vision)}:${Boolean(observation.reasoning)}`
+      : observation.kind === 'unsupported' ? `${observation.model}:unsupported:${observation.capability}` : `${observation.model}:${observation.kind}`
+    if (this.observed.has(key)) return
+    this.observed.add(key)
+    const now = this.options.now?.() ?? Date.now()
+    const current = this.capabilityProfile !== undefined
+      ? this.capabilityProfile
+      : this.options.home ? loadProviderCapabilityProfile(this.options.home) : null
+    this.capabilityProfile = updateProviderCapabilityProfile(current, observation, now)
+    if (this.options.home) {
+      try { saveProviderCapabilityProfile(this.options.home, this.capabilityProfile) } catch { /* Learning tidak boleh menggagalkan task. */ }
+    }
+  }
 
   markUnavailable(model: string): void {
     if (model) this.unavailable.add(model)
   }
 
-  async route(provider: NineRouterProvider, input: string, history: readonly Message[], signal?: AbortSignal): Promise<AutoSelection> {
+  markTaskUnavailable(model: string): void {
+    if (model) this.taskUnavailable.add(model)
+  }
+
+  async route(
+    provider: NineRouterProvider,
+    input: string,
+    history: readonly Message[],
+    signal?: AbortSignal,
+    requirements?: ProviderRequirements,
+  ): Promise<AutoSelection> {
     signal?.throwIfAborted()
+    if (requirements) this.requirements = { ...requirements }
     const priorTask = [...history].reverse().find((message) => message.role === 'user' && message.content && !continuation(message.content))?.content
     const priorAssessment = this.previous ?? (priorTask ? assessLocally(priorTask) : undefined)
     let ids: string[]
@@ -132,10 +194,15 @@ export class AutoModelRouter {
       discovered = false
       ids = [provider.model]
     }
-    const eligible = ids.filter((id) => !this.unavailable.has(id))
+    const eligible = ids.filter((id) => !this.unavailable.has(id) && !this.taskUnavailable.has(id))
     if (!eligible.length) throw new Error('Auto tidak memiliki model yang masih tersedia. Pilih model manual melalui /model.')
+    const now = this.options.now?.() ?? Date.now()
+    if (this.capabilityProfile === undefined) {
+      this.capabilityProfile = this.options.home ? loadProviderCapabilityProfile(this.options.home) : null
+    }
+    const capable = selectByCapabilities(eligible, this.requirements, this.capabilityProfile, now)
     let assessment = assessLocally(input, priorAssessment)
-    const judge = selectAutoModel(eligible, 'simple', provider.model)
+    const judge = selectAutoModel(capable.ids, 'simple', provider.model)
     if (discovered && judge) {
       const deadline = AbortSignal.timeout(12_000)
       const judgeSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
@@ -163,23 +230,25 @@ export class AutoModelRouter {
     }
     signal?.throwIfAborted()
     if (continuation(input) && this.previous) assessment = { ...assessment, difficulty: this.previous.difficulty, reason: 'Melanjutkan tingkat kesulitan pekerjaan sebelumnya.' }
-    const now = this.options.now?.() ?? Date.now()
     const profile = this.options.performance !== undefined
       ? this.options.performance
       : this.options.home ? loadAutoPerformanceProfile(this.options.home) : null
-    const measured = performanceChoice(eligible, assessment.difficulty, profile, inferPerformanceTags(input), now)
-    const selection = measured?.option ?? selectAutoModel(eligible, assessment.difficulty, provider.model)
+    const measured = performanceChoice(capable.ids, assessment.difficulty, profile, inferPerformanceTags(input), now)
+    const selection = measured?.option ?? selectAutoModel(capable.ids, assessment.difficulty, provider.model)
     if (!selection) throw new Error('Auto tidak menemukan model coding yang dikenal. Pilih model manual melalui /model.')
     if (!discovered) assessment.reason = 'Daftar model gagal dimuat; memakai model terakhir dengan penalaran yang sesuai.'
     else if (eligible.length !== ids.length) assessment.reason = `${assessment.reason} Model yang sebelumnya ditolak upstream tidak dipakai lagi pada sesi ini.`
+    if (capable.avoided) assessment.reason = `${assessment.reason} Profil capability lokal menghindari ${capable.avoided} model (${capable.reasons.join(', ')}).`
     if (measured) assessment.reason = `${assessment.reason} Profil eval lokal memilih model ini dari ${measured.samples} sampel (skor ${measured.quality}).`
     this.previous = assessment
     return {
       ...assessment,
       model: selection.modelId,
       reasoningEffort: selection.reasoningEffort,
-      routingPolicy: measured ? 'evaluation' : 'static',
+      routingPolicy: measured ? 'evaluation' : capable.avoided ? 'capability' : 'static',
       ...(measured ? { performanceSamples: measured.samples } : {}),
+      ...(capable.samples ? { capabilitySamples: capable.samples } : {}),
+      ...(capable.avoided ? { capabilityAvoided: capable.avoided } : {}),
     }
   }
 }

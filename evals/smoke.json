@@ -25,6 +25,8 @@
         ],
         "requiredTools": ["edit_file", "bash"],
         "forbiddenTools": ["write_file"],
+        "requiredChangedFiles": ["app.js"],
+        "allowedChangedFiles": ["app.js"],
         "requireVerification": true,
         "maxTurns": 8,
         "maxToolCalls": 10

@@ -148,6 +148,7 @@ test('target tool mencakup path tunggal, daftar path, dan file dalam apply_patch
   assert.deepEqual(instructionTargetsForTool('read_file', { path: 'src/a.ts' }), ['src/a.ts'])
   assert.deepEqual(instructionTargetsForTool('git_commit', { paths: ['a.ts', 'b.ts'] }), ['a.ts', 'b.ts'])
   assert.deepEqual(instructionTargetsForTool('test_impact', { changed_files: ['src/a.ts'] }), ['src/a.ts'])
+  assert.deepEqual(instructionTargetsForTool('change_impact', { changed_files: ['src/a.ts'] }), ['src/a.ts'])
   assert.deepEqual(instructionTargetsForTool('apply_patch', { patch: [
     '*** Begin Patch',
     '*** Update File: packages/ui/a.ts',

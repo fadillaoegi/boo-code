@@ -66,10 +66,18 @@ test('critic parser ketat dan context diff dibatasi sebagai data', () => {
   assert.equal(result?.findings[0].line, 12)
   assert.equal(parseCriticResult('{"verdict":"pass","findings":[{"severity":"low"}]}'), null)
   assert.equal(parseCriticResult('{"verdict":"findings","findings":[]}'), null)
-  const request = automaticReviewRequest('refactor', [{ label: 'src/app.ts', before: Buffer.from('const n = 1\n'), after: Buffer.from('const n = 2\n') }], [{ command: 'node --test', success: true }])
+  const request = automaticReviewRequest('refactor', [{ label: 'src/app.ts', before: Buffer.from('const n = 1\n'), after: Buffer.from('const n = 2\n') }], [{ command: 'node --test', success: true }], {
+    changedFiles: ['src/app.ts'],
+    affectedFiles: [{ path: 'src/consumer.ts', depth: 1, relations: ['imported-by'], confidence: 'high', test: false }],
+    affectedSymbols: [{ path: 'src/app.ts', name: 'value', kind: 'variable', line: 1 }],
+    edges: [{ from: 'src/app.ts', to: 'src/consumer.ts', relation: 'imported-by', confidence: 'high' }],
+    directTests: [], dependentTests: [], blastRadius: 'small', maxDepth: 4, indexedFiles: 2, truncated: false,
+  })
   assert.match(request, /src\/app\.ts/)
   assert.match(request, /PASS node --test/)
   assert.match(request, /\+\s*1 \| const n = 2/)
+  assert.match(request, /"blastRadius":"small"/)
+  assert.match(request, /src\/consumer\.ts/)
   assert.equal(automaticReviewEnabled('off'), false)
   assert.equal(automaticReviewEnabled(undefined), true)
 })

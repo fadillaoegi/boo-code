@@ -23,7 +23,14 @@ export interface EvalSuiteDefinition {
   description?: string
   model?: string
   effort?: string
+  coverage?: EvalCoverageRequirement
   cases: EvalCaseDefinition[]
+}
+
+export interface EvalCoverageRequirement {
+  minCases?: number
+  requiredTags?: string[]
+  requiredDifficulties?: TaskDifficulty[]
 }
 
 export interface EvalCaseReport {
@@ -105,16 +112,38 @@ function stringArray(value: unknown, location: string): string[] {
   return [...new Set(value)]
 }
 
+function workspacePath(value: unknown, location: string): string {
+  const path = text(value, location)
+  if (isAbsolute(path) || /^[a-z]:[\\/]/i.test(path) || path.includes('\\')) {
+    throw new Error(`${location} harus berupa path relatif dengan separator /.`)
+  }
+  if (path.split('/').some((part) => part === '.' || part === '..' || !part)) {
+    throw new Error(`${location} tidak boleh keluar dari workspace atau memiliki segmen kosong.`)
+  }
+  return path
+}
+
+function workspacePathArray(value: unknown, location: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`${location} harus berupa array path relatif.`)
+  return [...new Set(value.map((item, index) => workspacePath(item, `${location}[${index}]`)))]
+}
+
 function positiveInteger(value: unknown, location: string): number | undefined {
   if (value === undefined) return undefined
   if (!Number.isInteger(value) || (value as number) < 1) throw new Error(`${location} harus berupa integer positif.`)
   return value as number
 }
 
+function nonNegativeInteger(value: unknown, location: string): number | undefined {
+  if (value === undefined) return undefined
+  if (!Number.isInteger(value) || (value as number) < 0) throw new Error(`${location} harus berupa integer nol atau positif.`)
+  return value as number
+}
+
 function parseFileExpectation(value: unknown, location: string): NonNullable<EvalExpectation['files']>[number] {
   const item = record(value, location)
   knownKeys(item, ['path', 'exists', 'contains', 'notContains', 'sha256'], location)
-  const path = text(item.path, `${location}.path`)
+  const path = workspacePath(item.path, `${location}.path`)
   if (item.exists !== undefined && typeof item.exists !== 'boolean') throw new Error(`${location}.exists harus boolean.`)
   if (item.contains !== undefined && typeof item.contains !== 'string') throw new Error(`${location}.contains harus string.`)
   if (item.notContains !== undefined && typeof item.notContains !== 'string') throw new Error(`${location}.notContains harus string.`)
@@ -130,7 +159,11 @@ function parseFileExpectation(value: unknown, location: string): NonNullable<Eva
 
 function parseExpectation(value: unknown, location: string): EvalExpectation {
   const input = record(value, location)
-  knownKeys(input, ['files', 'requiredTools', 'forbiddenTools', 'requireVerification', 'maxTurns', 'maxToolCalls', 'answerContains'], location)
+  knownKeys(input, [
+    'files', 'requiredTools', 'forbiddenTools', 'requireVerification', 'maxTurns', 'maxToolCalls',
+    'answerContains', 'answerNotContains', 'requiredChangedFiles', 'allowedChangedFiles',
+    'forbiddenChangedFiles', 'maxChangedFiles',
+  ], location)
   const files = input.files === undefined
     ? undefined
     : Array.isArray(input.files)
@@ -140,6 +173,10 @@ function parseExpectation(value: unknown, location: string): EvalExpectation {
   const forbiddenTools = input.forbiddenTools === undefined ? undefined : stringArray(input.forbiddenTools, `${location}.forbiddenTools`)
   if (input.requireVerification !== undefined && typeof input.requireVerification !== 'boolean') throw new Error(`${location}.requireVerification harus boolean.`)
   if (input.answerContains !== undefined && typeof input.answerContains !== 'string') throw new Error(`${location}.answerContains harus string.`)
+  if (input.answerNotContains !== undefined && typeof input.answerNotContains !== 'string') throw new Error(`${location}.answerNotContains harus string.`)
+  const requiredChangedFiles = input.requiredChangedFiles === undefined ? undefined : workspacePathArray(input.requiredChangedFiles, `${location}.requiredChangedFiles`)
+  const allowedChangedFiles = input.allowedChangedFiles === undefined ? undefined : workspacePathArray(input.allowedChangedFiles, `${location}.allowedChangedFiles`)
+  const forbiddenChangedFiles = input.forbiddenChangedFiles === undefined ? undefined : workspacePathArray(input.forbiddenChangedFiles, `${location}.forbiddenChangedFiles`)
   const expectation: EvalExpectation = {
     ...(files ? { files } : {}),
     ...(requiredTools ? { requiredTools } : {}),
@@ -148,9 +185,16 @@ function parseExpectation(value: unknown, location: string): EvalExpectation {
     ...(positiveInteger(input.maxTurns, `${location}.maxTurns`) !== undefined ? { maxTurns: input.maxTurns as number } : {}),
     ...(positiveInteger(input.maxToolCalls, `${location}.maxToolCalls`) !== undefined ? { maxToolCalls: input.maxToolCalls as number } : {}),
     ...(input.answerContains !== undefined ? { answerContains: input.answerContains } : {}),
+    ...(input.answerNotContains !== undefined ? { answerNotContains: input.answerNotContains } : {}),
+    ...(requiredChangedFiles ? { requiredChangedFiles } : {}),
+    ...(allowedChangedFiles ? { allowedChangedFiles } : {}),
+    ...(forbiddenChangedFiles ? { forbiddenChangedFiles } : {}),
+    ...(nonNegativeInteger(input.maxChangedFiles, `${location}.maxChangedFiles`) !== undefined ? { maxChangedFiles: input.maxChangedFiles as number } : {}),
   }
   if (!(files?.length || requiredTools?.length || forbiddenTools?.length || input.requireVerification !== undefined
-    || input.maxTurns !== undefined || input.maxToolCalls !== undefined || input.answerContains !== undefined)) {
+    || input.maxTurns !== undefined || input.maxToolCalls !== undefined || input.answerContains !== undefined
+    || input.answerNotContains !== undefined || input.requiredChangedFiles !== undefined || input.allowedChangedFiles !== undefined
+    || input.forbiddenChangedFiles !== undefined || input.maxChangedFiles !== undefined)) {
     throw new Error(`${location} harus memiliki minimal satu pemeriksaan.`)
   }
   return expectation
@@ -159,7 +203,7 @@ function parseExpectation(value: unknown, location: string): EvalExpectation {
 /** Memvalidasi JSON suite dengan pesan yang menunjuk tepat ke field yang rusak. */
 export function parseEvalSuite(value: unknown): EvalSuiteDefinition {
   const input = record(value, 'Suite')
-  knownKeys(input, ['schemaVersion', 'name', 'description', 'model', 'effort', 'cases'], 'Suite')
+  knownKeys(input, ['schemaVersion', 'name', 'description', 'model', 'effort', 'coverage', 'cases'], 'Suite')
   if (input.schemaVersion !== undefined && input.schemaVersion !== EVAL_SCHEMA_VERSION) {
     throw new Error(`schemaVersion suite tidak didukung: ${String(input.schemaVersion)}.`)
   }
@@ -186,14 +230,47 @@ export function parseEvalSuite(value: unknown): EvalSuiteDefinition {
       expect: parseExpectation(item.expect, `${location}.expect`),
     }
   })
+  let coverage: EvalCoverageRequirement | undefined
+  if (input.coverage !== undefined) {
+    const value = record(input.coverage, 'Suite.coverage')
+    knownKeys(value, ['minCases', 'requiredTags', 'requiredDifficulties'], 'Suite.coverage')
+    const requiredDifficulties = value.requiredDifficulties === undefined
+      ? undefined
+      : stringArray(value.requiredDifficulties, 'Suite.coverage.requiredDifficulties')
+    if (requiredDifficulties?.some((difficulty) => !['simple', 'standard', 'complex', 'expert'].includes(difficulty))) {
+      throw new Error('Suite.coverage.requiredDifficulties berisi difficulty yang tidak valid.')
+    }
+    coverage = {
+      ...(positiveInteger(value.minCases, 'Suite.coverage.minCases') !== undefined ? { minCases: value.minCases as number } : {}),
+      ...(value.requiredTags !== undefined ? { requiredTags: stringArray(value.requiredTags, 'Suite.coverage.requiredTags') } : {}),
+      ...(requiredDifficulties ? { requiredDifficulties: requiredDifficulties as TaskDifficulty[] } : {}),
+    }
+  }
   return {
     schemaVersion: EVAL_SCHEMA_VERSION,
     name: text(input.name, 'Suite.name'),
     ...(optionalText(input.description, 'Suite.description') ? { description: input.description as string } : {}),
     ...(optionalText(input.model, 'Suite.model') ? { model: input.model as string } : {}),
     ...(optionalText(input.effort, 'Suite.effort') ? { effort: input.effort as string } : {}),
+    ...(coverage ? { coverage } : {}),
     cases,
   }
+}
+
+/** Memastikan suite tidak tampak lengkap hanya karena banyak variasi dari satu jenis tugas. */
+export function validateEvalCoverage(suite: EvalSuiteDefinition): string[] {
+  if (!suite.coverage) return []
+  const issues: string[] = []
+  if (suite.coverage.minCases !== undefined && suite.cases.length < suite.coverage.minCases) {
+    issues.push(`jumlah kasus ${suite.cases.length}, minimum ${suite.coverage.minCases}`)
+  }
+  const tags = new Set(suite.cases.flatMap((item) => item.tags))
+  const missingTags = (suite.coverage.requiredTags ?? []).filter((tag) => !tags.has(tag))
+  if (missingTags.length) issues.push(`tag wajib belum tercakup: ${missingTags.join(', ')}`)
+  const difficulties = new Set(suite.cases.map((item) => item.difficulty).filter(Boolean))
+  const missingDifficulties = (suite.coverage.requiredDifficulties ?? []).filter((difficulty) => !difficulties.has(difficulty))
+  if (missingDifficulties.length) issues.push(`difficulty wajib belum tercakup: ${missingDifficulties.join(', ')}`)
+  return issues
 }
 
 export function resolveEvalFixture(suitePath: string, fixture: string): string {

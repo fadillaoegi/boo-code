@@ -5,6 +5,7 @@ import { promptCommandTitle } from './commands.ts'
 import { IMPLEMENT_PLAN_PROMPT_MARK, planPromptTitle } from './planning.ts'
 import { referencedPromptTitle } from './references.ts'
 import { steeringPromptTitle } from './steering.ts'
+import { VERIFICATION_REPAIR_MARK } from './verificationRepair.ts'
 import type { AgentEvent } from './loop.ts'
 import type { Message } from '../domain/message.ts'
 import { latestTodos, parseTodos, type TodoItem } from '../tools/todo.ts'
@@ -47,16 +48,33 @@ export interface TaskStateSnapshot {
   evidenceCacheHits: number
   evidenceCacheSavedCharacters: number
   contextPrioritizedMessages: number
+  contextDependencyMessages: number
+  contextDependencyEdges: number
   parallelDiscoveryBatches: number
   parallelDiscoveryCalls: number
   truncatedToolResults: number
   deferredToolResultCharacters: number
+  toolTimeoutRecoveries: number
+  verificationRepairRounds: number
+  verificationRepairs: number
+  verificationRepairExhausted: number
+  changeImpactAnalyses: number
+  changeImpactAffectedFiles: number
+  changeImpactEdges: number
+  changeImpactDepth: number
+  changeImpactBlastRadius: 'small' | 'medium' | 'large' | null
+  changeImpactTruncated: boolean
+  lspSessionStarts: number
+  lspSessionReuses: number
+  lspSessionRestarts: number
+  lspOpenDocuments: number
 }
 
 const INTERNAL_USER_MARKS = [
   '[AUTOMATIC CRITIC FEEDBACK]',
   '[Boo on_complete hook feedback]',
   '[CHANGE RISK VERIFICATION]',
+  VERIFICATION_REPAIR_MARK,
 ]
 
 function bounded(value: string, maximum = 500): string {
@@ -115,10 +133,26 @@ export class TaskStateTracker {
   private evidenceCacheHits = 0
   private evidenceCacheSavedCharacters = 0
   private contextPrioritizedMessages = 0
+  private contextDependencyMessages = 0
+  private contextDependencyEdges = 0
   private parallelDiscoveryBatches = 0
   private parallelDiscoveryCalls = 0
   private truncatedToolResults = 0
   private deferredToolResultCharacters = 0
+  private toolTimeoutRecoveries = 0
+  private verificationRepairRounds = 0
+  private verificationRepairs = 0
+  private verificationRepairExhausted = 0
+  private changeImpactAnalyses = 0
+  private changeImpactAffectedFiles = 0
+  private changeImpactEdges = 0
+  private changeImpactDepth = 0
+  private changeImpactBlastRadius: 'small' | 'medium' | 'large' | null = null
+  private changeImpactTruncated = false
+  private lspSessionStarts = 0
+  private lspSessionReuses = 0
+  private lspSessionRestarts = 0
+  private lspOpenDocuments = 0
 
   constructor(history: readonly Message[] = [], model?: string, reasoningEffort?: string) {
     this.objective = taskObjective(history)
@@ -153,10 +187,26 @@ export class TaskStateTracker {
     this.evidenceCacheHits = 0
     this.evidenceCacheSavedCharacters = 0
     this.contextPrioritizedMessages = 0
+    this.contextDependencyMessages = 0
+    this.contextDependencyEdges = 0
     this.parallelDiscoveryBatches = 0
     this.parallelDiscoveryCalls = 0
     this.truncatedToolResults = 0
     this.deferredToolResultCharacters = 0
+    this.toolTimeoutRecoveries = 0
+    this.verificationRepairRounds = 0
+    this.verificationRepairs = 0
+    this.verificationRepairExhausted = 0
+    this.changeImpactAnalyses = 0
+    this.changeImpactAffectedFiles = 0
+    this.changeImpactEdges = 0
+    this.changeImpactDepth = 0
+    this.changeImpactBlastRadius = null
+    this.changeImpactTruncated = false
+    this.lspSessionStarts = 0
+    this.lspSessionReuses = 0
+    this.lspSessionRestarts = 0
+    this.lspOpenDocuments = 0
   }
 
   record(event: AgentEvent): void {
@@ -190,6 +240,8 @@ export class TaskStateTracker {
         break
       case 'context-trimmed':
         this.contextPrioritizedMessages += event.prioritizedMessages
+        this.contextDependencyMessages += event.dependencyMessages ?? 0
+        this.contextDependencyEdges += event.dependencyEdges ?? 0
         break
       case 'tool-parallel':
         if (event.stage === 'started') {
@@ -200,6 +252,28 @@ export class TaskStateTracker {
       case 'tool-result-truncated':
         this.truncatedToolResults += 1
         this.deferredToolResultCharacters += Math.max(0, event.originalCharacters - event.visibleCharacters)
+        break
+      case 'tool-recovery':
+        if (event.kind === 'timeout') this.toolTimeoutRecoveries += 1
+        break
+      case 'verification-repair':
+        this.verificationRepairRounds = Math.max(this.verificationRepairRounds, event.round)
+        if (event.stage === 'repaired') this.verificationRepairs += 1
+        if (event.stage === 'exhausted') this.verificationRepairExhausted += 1
+        break
+      case 'change-impact':
+        this.changeImpactAnalyses += 1
+        this.changeImpactAffectedFiles = event.affectedFiles
+        this.changeImpactEdges = event.edges
+        this.changeImpactDepth = event.maxDepth
+        this.changeImpactBlastRadius = event.blastRadius
+        this.changeImpactTruncated = event.truncated
+        break
+      case 'lsp-session':
+        if (event.stage === 'started') this.lspSessionStarts += 1
+        else if (event.stage === 'reused') this.lspSessionReuses += 1
+        else this.lspSessionRestarts += 1
+        this.lspOpenDocuments = Math.max(this.lspOpenDocuments, event.openDocuments)
         break
       case 'tool-denied':
         this.active.delete(event.callId)
@@ -287,10 +361,26 @@ export class TaskStateTracker {
       evidenceCacheHits: this.evidenceCacheHits,
       evidenceCacheSavedCharacters: this.evidenceCacheSavedCharacters,
       contextPrioritizedMessages: this.contextPrioritizedMessages,
+      contextDependencyMessages: this.contextDependencyMessages,
+      contextDependencyEdges: this.contextDependencyEdges,
       parallelDiscoveryBatches: this.parallelDiscoveryBatches,
       parallelDiscoveryCalls: this.parallelDiscoveryCalls,
       truncatedToolResults: this.truncatedToolResults,
       deferredToolResultCharacters: this.deferredToolResultCharacters,
+      toolTimeoutRecoveries: this.toolTimeoutRecoveries,
+      verificationRepairRounds: this.verificationRepairRounds,
+      verificationRepairs: this.verificationRepairs,
+      verificationRepairExhausted: this.verificationRepairExhausted,
+      changeImpactAnalyses: this.changeImpactAnalyses,
+      changeImpactAffectedFiles: this.changeImpactAffectedFiles,
+      changeImpactEdges: this.changeImpactEdges,
+      changeImpactDepth: this.changeImpactDepth,
+      changeImpactBlastRadius: this.changeImpactBlastRadius,
+      changeImpactTruncated: this.changeImpactTruncated,
+      lspSessionStarts: this.lspSessionStarts,
+      lspSessionReuses: this.lspSessionReuses,
+      lspSessionRestarts: this.lspSessionRestarts,
+      lspOpenDocuments: this.lspOpenDocuments,
     }
   }
 }
@@ -328,8 +418,13 @@ export function formatTaskStatus(state: TaskStateSnapshot): string {
     state.protocolWarnings || state.protocolFallbacks || state.protocolStops ? `Tool protocol: ${state.protocolWarnings} peringatan · ${state.protocolFallbacks} fallback model · ${state.protocolStops} dihentikan` : '',
     state.evidenceCacheHits ? `Evidence cache: ${state.evidenceCacheHits} hit · ${state.evidenceCacheSavedCharacters.toLocaleString('id-ID')} karakter tidak dikirim ulang` : '',
     state.contextPrioritizedMessages ? `Context relevance: ${state.contextPrioritizedMessages} pesan lama relevan dipertahankan` : '',
+    state.contextDependencyMessages ? `Context dependency: ${state.contextDependencyMessages} pesan melalui ${state.contextDependencyEdges} relasi dipertahankan` : '',
     state.parallelDiscoveryBatches ? `Parallel discovery: ${state.parallelDiscoveryCalls} tool call dalam ${state.parallelDiscoveryBatches} batch` : '',
     state.truncatedToolResults ? `Tool result store: ${state.truncatedToolResults} hasil besar · ${state.deferredToolResultCharacters.toLocaleString('id-ID')} karakter ditahan dari context` : '',
+    state.toolTimeoutRecoveries ? `Timeout recovery: ${state.toolTimeoutRecoveries} command dihentikan aman dan diminta diperiksa sebelum diulang` : '',
+    state.verificationRepairRounds ? `Verification repair: ${state.verificationRepairRounds} putaran · ${state.verificationRepairs} pulih${state.verificationRepairExhausted ? ` · ${state.verificationRepairExhausted} kehabisan batas` : ''}` : '',
+    state.changeImpactAnalyses ? `Change impact: ${state.changeImpactAffectedFiles} file · ${state.changeImpactEdges} relasi · depth ${state.changeImpactDepth} · blast radius ${state.changeImpactBlastRadius}${state.changeImpactTruncated ? ' · hasil dibatasi' : ''}` : '',
+    state.lspSessionStarts || state.lspSessionReuses || state.lspSessionRestarts ? `LSP session: ${state.lspSessionStarts} baru · ${state.lspSessionReuses} reuse · ${state.lspSessionRestarts} restart · ${state.lspOpenDocuments} dokumen aktif` : '',
     state.promptInjectionDetected ? 'Keamanan: sinyal prompt injection terdeteksi; approval berisiko harus diperiksa ulang.' : '',
   ].filter(Boolean).join('\n')
 }

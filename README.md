@@ -1,7 +1,246 @@
 # Boo Code
 
-Coding agent buatan FLdev. Satu otak (`@boo/core`), dua antarmuka: CLI `boo` dan web lokal.
-Nama produknya Boo Code; CLI dan web hanyalah dua cara menjalankannya. Model diakses lewat [9Router](http://localhost:20128) sebagai satu pintu.
+[![CI](https://github.com/fadillaoegi/boo-code/actions/workflows/ci.yml/badge.svg)](https://github.com/fadillaoegi/boo-code/actions/workflows/ci.yml)
+![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.12-339933?logo=node.js&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)
+![License](https://img.shields.io/badge/license-UNLICENSED-lightgrey)
+
+Boo Code adalah coding agent lokal buatan FLdev untuk terminal dan browser. Satu
+core agent yang sama menangani CLI interaktif, mode headless/CI, antarmuka web,
+scheduler, event trigger, serta remote device. Boo dapat memakai 9Router, OpenAI,
+Anthropic, OpenRouter, Ollama, atau endpoint OpenAI-compatible lain.
+
+> Status: versi `0.1.0`, belum dipublikasikan ke npm registry. Distribusi saat ini
+> memakai tarball dari source atau artifact workflow GitHub Actions.
+
+## Fitur utama
+
+- Mode Auto memilih model dan tingkat penalaran berdasarkan kesulitan task.
+- Membaca, mengubah, menjalankan, menguji, dan meninjau repository dengan approval.
+- AST repository map, LSP, code graph, change impact, dan test impact.
+- Verification repair loop, automatic reviewer, risk engine, dan failure postmortem.
+- Sesi persisten dengan resume, fork, rewind, undo, restore, plan, spec, dan queue.
+- Browser automation, aplikasi terdaftar, WhatsApp Web pribadi, dan computer-use bridge.
+- Background scheduler, file/Git/custom/webhook triggers, dan remote device node.
+- Sandbox lintas OS, secret guard, prompt-injection defense, dan file credential guard.
+- Penyimpanan file JSON/JSONL lokal; tidak membutuhkan database.
+
+## Daftar isi
+
+- [Persyaratan](#persyaratan)
+- [Instalasi](#instalasi)
+- [Konfigurasi pertama](#konfigurasi-pertama)
+- [Penyedia model](#penyedia-model)
+- [Quick start](#quick-start)
+- [Antarmuka web lokal](#antarmuka-web-lokal)
+- [Konfigurasi lanjutan](#konfigurasi)
+- [Scheduler dan event trigger](#background-agent--scheduler)
+- [Dokumentasi tool dan keamanan](#tool-dan-izin)
+- [Validasi](#validasi)
+
+## Persyaratan
+
+| Komponen | Kebutuhan |
+|---|---|
+| Node.js | `22.12` atau lebih baru untuk paket rilis |
+| Package manager | npm; pnpm `10` hanya diperlukan ketika membangun dari source |
+| Git | Diperlukan untuk clone dan fitur repository Git |
+| Model | Minimal satu provider API, 9Router, atau Ollama lokal |
+| OS | macOS, Windows x64/ARM64, atau Linux/Ubuntu |
+
+Periksa environment sebelum melanjutkan:
+
+```bash
+node --version
+npm --version
+git --version
+```
+
+Jika Node.js belum tersedia, pasang Node.js 22.12/24 dari
+[nodejs.org](https://nodejs.org/) atau version manager pilihan Anda. Setelah
+instalasi di Windows, buka ulang PowerShell/Windows Terminal agar PATH diperbarui.
+Pada Ubuntu/Debian, `sudo apt install bubblewrap` menyediakan sandbox `bwrap`.
+
+Untuk sandbox command yang enforced, macOS memakai Seatbelt bawaan, Windows memakai
+Microsoft MXC yang dipasang sebagai dependency, dan Linux sebaiknya memasang
+Bubblewrap (`bwrap`). Jika backend native tidak tersedia, Boo menjelaskan fallback
+dan tetap meminta approval; status sandbox tidak diklaim sebagai enforced.
+
+## Instalasi
+
+### Opsi A — build dan pasang dari repository
+
+Cara ini paling pasti selama paket belum diterbitkan ke npm:
+
+```bash
+git clone https://github.com/fadillaoegi/boo-code.git
+cd boo-code
+npm install -g pnpm@10
+pnpm install --frozen-lockfile
+pnpm release
+npm install -g ./release/boo-code-0.1.0.tgz
+boo-code setup
+```
+
+Pastikan kedua nama command tersedia:
+
+```bash
+boo-code --version
+boo --version
+boo-code doctor
+```
+
+### Opsi B — pasang artifact CI
+
+Workflow `CI` membuat artifact bernama `boo-code-package`. Unduh artifact dari
+halaman **Actions → CI → run yang berhasil → Artifacts**, ekstrak ZIP-nya, lalu:
+
+```bash
+npm install -g ./boo-code-0.1.0.tgz
+boo-code setup
+```
+
+Artifact CI dan tarball lokal berisi CLI serta `@boo/core` yang sudah dibundel.
+Dependency runtime akan dipasang otomatis oleh npm.
+
+### Opsi C — jalankan source untuk development
+
+Source TypeScript langsung direkomendasikan memakai Node.js 24:
+
+```bash
+git clone https://github.com/fadillaoegi/boo-code.git
+cd boo-code
+npm install -g pnpm@10
+pnpm install --frozen-lockfile
+pnpm boo
+```
+
+Untuk menyediakan command global yang langsung mengikuti perubahan source:
+
+```bash
+cd packages/cli
+npm link
+boo-code setup
+```
+
+### Uninstall
+
+```bash
+npm uninstall -g boo-code
+```
+
+Uninstall tidak menghapus sesi dan konfigurasi dalam `~/.boo`.
+
+## Konfigurasi pertama
+
+Jalankan wizard setelah instalasi:
+
+```bash
+boo-code setup
+```
+
+Wizard dapat memasang satu atau beberapa provider, memeriksa koneksi tanpa
+menampilkan API key, lalu memilih model bawaan. Pilih `auto` agar Boo menentukan
+model dan tingkat penalaran untuk setiap task.
+
+```bash
+boo-code doctor
+```
+
+`doctor` memeriksa Node.js, provider/model, workspace, Git, sandbox, dan integrasi
+opsional tanpa mencetak credential, source, prompt, cookie, atau isi halaman.
+
+### Konfigurasi manual
+
+Wizard adalah cara yang direkomendasikan. Jika perlu konfigurasi manual, buat
+`~/.boo/.env` dan isi minimal satu provider. Contoh 9Router:
+
+```env
+NINEROUTER_URL=http://localhost:20128
+NINEROUTER_KEY=sk-ganti-dengan-key-anda
+BOO_MODEL=auto
+```
+
+Contoh provider resmi atau lokal:
+
+```env
+# OpenAI — base URL opsional, default https://api.openai.com/v1
+OPENAI_API_KEY=sk-ganti-dengan-key-anda
+
+# Anthropic — base URL opsional, default https://api.anthropic.com
+ANTHROPIC_API_KEY=sk-ant-ganti-dengan-key-anda
+
+# OpenRouter — base URL opsional, default https://openrouter.ai/api/v1
+OPENROUTER_API_KEY=sk-or-ganti-dengan-key-anda
+
+# Ollama lokal — tidak membutuhkan API key
+OLLAMA_BASE_URL=http://localhost:11434/v1
+
+# Server OpenAI-compatible lain
+CUSTOM_API_URL=http://localhost:1234/v1
+CUSTOM_API_KEY=opsional
+
+BOO_MODEL=auto
+BOO_SANDBOX=workspace-write
+BOO_NETWORK_ACCESS=false
+```
+
+Anda boleh memasang beberapa provider sekaligus. `/model` akan menggabungkan model
+yang tersedia; model non-9Router diberi prefix seperti `openai:`, `anthropic:`,
+`openrouter:`, `ollama:`, atau `custom:`.
+
+Konfigurasi dibaca berurutan dan sumber terakhir menang:
+
+1. `~/.boo/.env` — konfigurasi global pengguna.
+2. `<workspace>/.env` — konfigurasi proyek.
+3. `<workspace>/.env.local` — override proyek yang sebaiknya tidak di-commit.
+4. Environment variable proses — prioritas tertinggi.
+
+Opsi Boo yang umum:
+
+| Variabel | Contoh | Fungsi |
+|---|---|---|
+| `BOO_MODEL` | `auto` | Model tetap atau router otomatis per task |
+| `BOO_EFFORT` | `medium` | Reasoning model manual: `low`, `medium`, `high`, `xhigh` |
+| `BOO_SANDBOX` | `workspace-write` | `read-only`, `workspace-write`, atau `danger-full-access` |
+| `BOO_NETWORK_ACCESS` | `false` | Izinkan network untuk command sandbox bila `true` |
+| `BOO_MAX_TURNS` | `100` | Batas putaran agent per task |
+| `BOO_MAX_CONTEXT_TOKENS` | `128000` | Override anggaran context model |
+| `BOO_TRACE` | `true` | Simpan trace metrik lokal tanpa prompt/source/output |
+| `BOO_AUTO_REVIEW` | `true` | Aktifkan reviewer otomatis setelah perubahan kode |
+
+Jangan commit API key. `boo-code setup` menulis konfigurasi global dengan izin
+`0600`; pada Windows akses mengikuti ACL akun pengguna.
+
+## Quick start
+
+```bash
+cd /path/ke/proyek
+boo-code
+```
+
+Contoh prompt:
+
+```text
+Periksa repository ini, cari penyebab test gagal, perbaiki source, lalu jalankan test terkait.
+```
+
+Perintah penting dalam sesi:
+
+```text
+/model auto
+/plan <tugas>
+/implement
+/review
+/status
+/undo
+/restore
+/help
+```
+
+Gunakan `Shift+Enter` untuk menambah baris dan `Enter` untuk mengirim prompt.
+Sertakan konteks dengan `@src/file.ts`, `@src/file.ts:20-80`, atau
+`@"folder dengan spasi"`.
 
 ## Antarmuka web lokal
 
@@ -11,29 +250,12 @@ Jalankan dari direktori proyek yang ingin dikerjakan:
 boo-code web
 ```
 
-Boo membuka browser ke server pada `127.0.0.1` dengan token acak per proses. Bila
-port tertentu diperlukan, gunakan `boo-code web --port 3000`; `--no-open` menahan
-browser agar tidak dibuka, misalnya saat dijalankan dari skrip. Halaman menyediakan
-sesi, model, spec, antrean, streaming jawaban, dan persetujuan perubahan/perintah;
-menutup tab tidak menghentikan pekerjaan. Tekan Ctrl-C di terminal untuk menutup
-server.
+Boo membuka browser ke server loopback bertoken acak. Gunakan `--port 3000` untuk
+port tertentu atau `--no-open` agar browser tidak dibuka otomatis. Halaman web
+menyediakan sesi, model, spec, antrean, streaming jawaban, pengaturan provider, dan
+dialog persetujuan. API key hanya dapat diisi dan tidak pernah dikirim kembali ke UI.
 
-Tombol ⚙ membuka pengaturan penyedia model: alamat API dan kunci untuk 9Router,
-OpenAI, Anthropic, OpenRouter, Ollama, atau alamat OpenAI-compatible lain. Kunci
-hanya bisa diisi, tidak pernah ditampilkan kembali — halaman hanya diberi tahu
-apakah kuncinya sudah ada. Koneksi diperiksa lebih dulu, jadi kunci yang salah
-ketik tidak tersimpan diam-diam:
-
-```
-  Ollama · model lokal di komputer ini, tanpa kunci
-  [http://localhost:11434/v1] [tanpa kunci] [Simpan]
-  Tidak dapat terhubung ke Ollama: fetch failed
-```
-
-Setelan tersimpan di `~/.boo/.env` dengan izin `600`, dan penyedia yang baru
-ditambahkan langsung dapat dipakai tanpa menjalankan ulang server.
-
-## Memasang di mesin lain
+## Paket rilis dan mesin lain
 
 Buat paket sekali dari repo ini:
 
@@ -43,9 +265,10 @@ pnpm release
 ```
 
 Hasilnya `release/boo-code-0.1.0.tgz`: CLI dan `@boo/core` dibundel menjadi satu
-berkas JavaScript (sekitar 1 MB), dengan compiler TypeScript sebagai satu-satunya
-dependency runtime — dipakai analisis AST dan dipasang otomatis oleh npm. Salin tarball itu ke mesin
-tujuan — yang cukup punya Node.js 22.12 atau lebih baru — lalu:
+berkas JavaScript. Compiler TypeScript untuk analisis AST dan Microsoft MXC SDK
+untuk sandbox Windows menjadi dependency runtime yang dipasang otomatis oleh npm.
+Salin tarball itu ke mesin tujuan—yang cukup mempunyai Node.js 22.12 atau lebih
+baru—lalu:
 
 ```bash
 npm install -g ./boo-code-0.1.0.tgz
@@ -344,7 +567,8 @@ aplikasi lain, dan tidak ada alasan memuatnya ke dalam proses ini.
 
 Command dari tool `bash`, proses latar belakang, dan `/run` memakai mode
 `workspace-write` secara bawaan. Pada macOS Boo memakai Seatbelt
-(`sandbox-exec`); pada Linux memakai Bubblewrap (`bwrap`) bila tersedia. Sandbox
+(`sandbox-exec`); pada Linux memakai Bubblewrap (`bwrap`) bila tersedia; pada
+Windows memakai Microsoft MXC ProcessContainer (AppContainer/BaseContainer). Sandbox
 mengizinkan write di workspace dan direktori temporer, membuat `.git`, `.boo`,
 `.codex`, serta `.agents` read-only, dan memblokir network. Variabel environment
 yang tampak seperti API key, token, secret, password, atau credential dibuang
@@ -365,11 +589,20 @@ Mode yang tersedia:
 
 Gunakan `--sandbox read-only` untuk satu sesi. Network hanya dibuka bila
 `BOO_NETWORK_ACCESS=true`; ini tetap tidak memasukkan credential yang disaring ke
-environment command. Bila `bwrap` tidak terpasang di Linux, atau pada Windows yang
-belum memiliki backend filesystem sandbox Boo, command tetap meminta approval dan
-hasil tool menampilkan bahwa kebijakan tidak enforced—Boo tidak mengaku sandbox
-aktif. Dukungan backend Windows yang benar adalah tahap lanjutan, bukan diganti
-dengan pembatasan PowerShell yang mudah dilewati.
+environment command. Di Windows, Boo menjalankan `wxc-exec.exe` dari paket resmi
+`@microsoft/mxc-sdk`, memeriksa `--probe` sekali per proses, memilih binary x64 atau
+ARM64, dan mengirim policy melalui config base64—bukan pembatasan PowerShell.
+AppContainer diberi ACL hanya untuk workspace, direktori tool read-only, serta temp
+khusus Boo; metadata agent ditolak, UI/clipboard/injection dimatikan, dan Job Object
+MXC menutup seluruh pohon proses. Policy/ACL dibersihkan sesudah proses selesai.
+
+Bila `bwrap` tidak terpasang di Linux, binary MXC hilang, arsitektur Windows bukan
+x64/ARM64, atau probe native gagal, command tetap meminta approval dan hasil tool
+menampilkan bahwa kebijakan tidak enforced—Boo tidak pernah diam-diam menganggap
+fallback raw sebagai sandbox. `MXC_BIN_DIR` dapat menunjuk instalasi MXC terpisah;
+secara bawaan binary dari dependency yang dikunci lockfile Boo digunakan. Test live
+Windows otomatis memeriksa write workspace, penolakan sibling/metadata, dan mode
+read-only ketika suite dijalankan pada host Windows yang kompatibel.
 
 ### Permission rules persisten
 
@@ -500,6 +733,28 @@ dalam berkas CLI. Ia dipasang sebagai dependency paket dan dimuat sekali saat
 analisis AST pertama dibutuhkan; bila tidak tersedia di mesin itu, analisis turun
 ke mode `fallback` tanpa error. Paket rilis tetap sekitar satu megabyte.
 
+### Change Impact Graph
+
+Tool baca-saja `change_impact` memulai dari file yang berubah lalu mengikuti graph
+ke arah konsumen: file yang mengimpor, pemanggil simbol, subclass/implementasi,
+dan test berdasarkan dependency maupun konvensi nama. Setiap hasil membawa
+kedalaman propagasi, jenis relasi, confidence, simbol yang berubah, dan ukuran
+blast radius `small`, `medium`, atau `large`.
+
+Relasi import memiliki confidence tinggi. Relasi call dan inheritance hanya dibuat
+bila definisi simbol unik atau berasal dari file yang benar-benar diimpor, sehingga
+nama umum seperti `run` tidak menghubungkan seluruh repository secara palsu. Graph
+dibatasi 100 file awal, 80 file terdampak, 180 edge, dan kedalaman default empat
+(maksimal enam); hasil yang mencapai batas ditandai `truncated`.
+
+Graph dibuat dari indeks repository incremental yang sama dengan `code_search` dan
+`code_graph`, tanpa menjalankan source dan tanpa database tambahan. Completion
+verification otomatis memakai graph ini untuk memilih jalur dan test yang perlu
+diperiksa. Automatic critic juga menerima ringkasan graph yang dibatasi—bukan
+source tambahan—agar review mencakup konsumen perubahan. `/status`, `/stats`,
+CLI/web, trace lokal, dan eval mencatat jumlah node/edge serta blast radius tanpa
+menyimpan path di trace.
+
 Tool `diagnostics` mendeteksi pemeriksaan statis yang sudah dikonfigurasi proyek,
 misalnya script `typecheck`/`lint`, `go vet`, `cargo check`, `dart analyze`,
 `flutter analyze`, Pyright, atau Ruff lokal. Command tidak berasal dari teks model,
@@ -569,8 +824,9 @@ database—sehingga `/resume` tetap memiliki konteks keputusan tersebut.
 
 Setiap permintaan CLI/web secara bawaan menulis satu ringkasan JSONL ke
 `~/.boo/traces/`. Trace hanya berisi metrik: model/routing, waktu, turn, nama dan
-durasi tool, kegagalan, retry, status verifikasi, tingkat risiko, compaction, jumlah arahan live,
-dan hasil akhir.
+durasi tool, kegagalan, retry, status serta putaran repair verifikasi, ukuran
+change-impact graph, tingkat risiko, compaction, jumlah arahan live, dan hasil
+akhir.
 Prompt, jawaban, reasoning, source code, path file, argumen, preview, serta output
 tool tidak direkam. Workspace diidentifikasi dengan hash path, bukan path aslinya.
 
@@ -583,6 +839,28 @@ BOO_TRACE=false
 
 Trace terpisah per run sehingga tidak membutuhkan database atau lock lintas proses;
 file rusak dilewati dan tidak pernah menghambat agent.
+
+### Failure Postmortem
+
+Jika task berakhir `error`, `stopped`, atau `incomplete`, Boo membuat postmortem
+lokal secara deterministik dari event yang benar-benar terjadi. Tidak ada panggilan
+model tambahan. Penyebab utama dibedakan menjadi autentikasi/limit/koneksi/context
+provider, request capability, timeout/kegagalan/penolakan/argumen tool, loop,
+function-call protocol, verifikasi, batas turn, atau unknown. Bukti yang ditampilkan
+mencakup model, jumlah turn/retry/tool, nama tool terkait, repair verifikasi, dan
+fallback protocol, lalu satu tindakan lanjutan yang spesifik.
+
+Laporan disimpan di `~/.boo/postmortems/<hash-workspace>/` dengan folder `700`, file
+`600`, dan retensi 100 laporan per workspace. Hanya metadata kategorikal yang
+disimpan: tidak ada prompt, pesan error mentah, reasoning, source code, path,
+argumen, preview, jawaban, atau output tool. File rusak/symlink dilewati dan
+kegagalan menulis postmortem tidak pernah menggagalkan task. Kegagalan antara yang
+berhasil dipulihkan juga tidak dibuatkan postmortem, dan pembatalan pengguna bukan
+dianggap kegagalan.
+
+Postmortem ditampilkan setelah kegagalan dan tersedia kembali melalui
+`/postmortem` di CLI/web. `boo-code exec --json` mengirim event aman
+`run.postmortem`. Seluruh mekanisme memakai file JSON lokal tanpa database.
 
 ### Memori proyek persisten
 
@@ -679,8 +957,19 @@ server lokal proyek dan saat ini mengenali:
 
 Boo tidak memasang server secara otomatis. Jika executable belum tersedia, hasil
 tool menyebut dependency yang perlu dipasang. Setiap server dijalankan melalui
-sandbox command dengan credential environment disaring, meminta approval, diberi
-timeout, dan dihentikan setelah query. Lokasi definition/reference di luar
+sandbox command dengan credential environment disaring, meminta approval, dan
+setiap request diberi timeout. Proses yang sudah diinisialisasi dipakai ulang
+berdasarkan workspace, command server, dan kebijakan sandbox. Perubahan file
+dikirim sebagai `textDocument/didChange`, sehingga definition/diagnostics terbaru
+tidak memerlukan cold start baru.
+
+Pool dibatasi empat server dan 40 dokumen terbuka per session. Session yang idle
+lima menit ditutup dengan `shutdown`/`exit`; dokumen terlama mendapat `didClose`
+lebih dahulu. Jika server crash atau request gagal, Boo membuang session, memulai
+ulang sekali, dan membuka kembali dokumen dari filesystem aktual. Proses tidak
+dipersistenkan lintas restart Boo dan tidak memerlukan database. `/status`,
+`/stats`, CLI/web, JSON exec, trace, dan eval membedakan session baru, reuse, dan
+restart tanpa merekam path atau isi dokumen. Lokasi definition/reference di luar
 workspace tidak diteruskan ke model, dan permintaan untuk file rahasia ditolak.
 
 ### Skills
@@ -936,6 +1225,8 @@ tekan `Esc` lalu `Enter` dengan cepat sebagai alternatif. [Panduan Apple](https:
 | `/context` | lihat pemakaian, sumber, dan ruang konteks model |
 | `/status` | lihat tujuan, progres todo, tool, file terdampak, dan verifikasi task terakhir |
 | `/stats` | lihat metrik lokal 100 permintaan terakhir untuk workspace ini |
+| `/capabilities` | lihat capability provider/model yang dipelajari Auto secara lokal |
+| `/postmortem` | lihat diagnosis metadata kegagalan terakhir pada workspace ini |
 | `/review [base]` | review working tree atau branch terhadap base tanpa mengedit |
 | `/spec <ide>` | rancang fitur dulu: requirements, design, tasks, lalu kerjakan |
 | `/spec` | lihat spec di proyek ini dan lanjutkan tahapnya |
@@ -1118,6 +1409,21 @@ manual kapan saja melalui `/model <id> [tingkat]` untuk menonaktifkan Auto. Sesi
 baru memakai Auto secara bawaan; isi `BOO_MODEL` dengan id tertentu untuk membuat
 model tersebut menjadi default manual.
 
+Auto juga mempelajari capability provider dari kejadian runtime nyata. Respons
+berhasil membuktikan ketersediaan serta dukungan tool, gambar, reasoning, dan
+ukuran konteks yang sudah diterima. Error eksplisit 404, fitur tidak didukung,
+context limit, atau function-call rusak menjadi sinyal untuk menghindari model
+yang tidak cocok pada task berikutnya. Model yang belum dikenal tetap boleh
+dicoba, kegagalan availability hanya didinginkan selama enam jam, seluruh bukti
+menua setelah 90 hari, dan router kembali ke kandidat awal jika penyaringan akan
+menghabiskan semua pilihan.
+
+Profil ini disimpan privat di `~/.boo/provider-capabilities.json`. Isinya hanya id
+model, counter, batas token, dan waktu—tidak pernah prompt, jawaban, source code,
+argumen tool, output, atau path workspace. Periksa bukti yang aktif dengan
+`/capabilities` di CLI maupun web. Saat profil memengaruhi routing, alasan Auto dan
+event JSONL `model.selected` menampilkan jumlah sampel serta model yang dihindari.
+
 ## Struktur
 
 ```text
@@ -1143,6 +1449,26 @@ build, atau `git diff --check`. Test yang dijalankan sebelum edit baru tidak
 dianggap bukti untuk hasil terbaru. Jika model tetap menyimpulkan pekerjaan tanpa
 pemeriksaan, CLI dan web menampilkan peringatan **belum ada verifikasi**; command
 yang gagal ditampilkan sebagai **verifikasi belum berhasil**.
+
+### Verification Repair Loop
+
+Jika pemeriksaan yang dikenali gagal setelah Boo mengubah workspace, agent tidak
+langsung menyatakan selesai. Boo memberi konteks repair terstruktur: diagnosis
+hasil pemeriksaan terakhir, perbaikan source sekecil mungkin, lalu pemeriksaan
+terarah ulang. Mengubah atau melemahkan test hanya agar lolos, mematikan guard,
+dan mengulang command identik tanpa diagnosis dilarang.
+
+Loop dibatasi tiga putaran. Keberhasilan pemeriksaan menutupnya sebagai
+**repaired**; bila model terus menyimpulkan terlalu dini, batasnya menjadi
+**exhausted** dan Boo melaporkan pekerjaan belum terverifikasi secara jujur.
+Kegagalan lingkungan atau masalah lama yang tidak disebabkan perubahan juga harus
+dilaporkan, bukan disamarkan. Loop hanya aktif setelah ada mutasi nyata sehingga
+test awal yang memang sudah gagal tidak memaksa agent mengubah source.
+
+CLI dan web menampilkan fase repair, `/status` merangkum putaran task aktif, dan
+`/stats` mengagregasikan jumlah putaran, pemulihan, serta batas yang habis. State
+repair hanya menyimpan revisi dan nama command yang dibatasi panjangnya; output
+tool tetap berada di riwayat tool terlindungi dan tidak masuk trace lokal.
 
 ### Change Risk Engine
 
@@ -1191,12 +1517,14 @@ dapat dimatikan dengan `BOO_AUTO_REVIEW=false`.
 Benchmark menjalankan Boo sungguhan pada salinan fixture di direktori temporer,
 lalu memberi skor berdasarkan artefak file, hash berkas yang wajib dipertahankan,
 tool yang wajib/dilarang, bukti verifikasi, jumlah putaran, jumlah tool call, dan
-isi jawaban. Suite bawaan memuat tujuh kasus untuk debugging, implementasi,
-perubahan multi-file, aturan `BOO.md`, investigasi baca-saja, edge case, dan
-kompatibilitas API.
+isi jawaban. Snapshot sebelum/sesudah juga memastikan file wajib benar-benar
+berubah dan tidak ada test atau file di luar scope yang ikut dimodifikasi. Suite
+bawaan memuat sebelas kasus, termasuk debugging kompleks, refactor lintas modul,
+path traversal, race condition async, navigasi repository besar, aturan `BOO.md`,
+investigasi baca-saja, edge case, dan kompatibilitas API.
 
-Validasi schema, ID unik, expectation, serta keberadaan seluruh fixture tidak
-menghubungi provider dan tidak memakai kuota:
+Validasi schema, ID unik, expectation, keberadaan seluruh fixture, serta gate
+cakupan tag/difficulty tidak menghubungi provider dan tidak memakai kuota:
 
 ```bash
 pnpm eval:validate
@@ -1224,9 +1552,10 @@ memiliki difficulty eksplisit agar hasil model manual tetap dapat melatih router
 database dan tidak ada isi pekerjaan yang direkam.
 
 Laporan JSON menyimpan hasil per kasus, durasi, model, skor, turn, tool call,
-kegagalan tool, retry, dan status verifikasi. Baseline juga berupa JSON biasa—tanpa
-database. Perbandingan hanya mencakup kasus yang benar-benar dijalankan, sehingga
-filter parsial tidak dianggap menghilangkan kasus lain:
+kegagalan tool, retry, status verifikasi, dan daftar file yang berubah. Baseline
+juga berupa JSON biasa—tanpa database. Perbandingan hanya mencakup kasus yang
+benar-benar dijalankan, sehingga filter parsial tidak dianggap menghilangkan kasus
+lain:
 
 ```bash
 pnpm eval:benchmark --report .boo/eval/latest.json \
@@ -1247,6 +1576,11 @@ Format suite:
   "schemaVersion": 1,
   "name": "Regression project",
   "model": "auto",
+  "coverage": {
+    "minCases": 1,
+    "requiredTags": ["debugging"],
+    "requiredDifficulties": ["standard"]
+  },
   "cases": [{
     "id": "fix-example",
     "prompt": "Perbaiki bug dan jalankan test.",
@@ -1260,6 +1594,10 @@ Format suite:
         { "path": "test/app.test.ts", "sha256": "<64-digit-sha256>" }
       ],
       "requiredTools": ["edit_file", "bash"],
+      "requiredChangedFiles": ["src/app.ts"],
+      "allowedChangedFiles": ["src/app.ts"],
+      "forbiddenChangedFiles": ["test/app.test.ts"],
+      "maxChangedFiles": 1,
       "requireVerification": true,
       "maxTurns": 8,
       "maxToolCalls": 12
@@ -1522,6 +1860,7 @@ lalu membaca berkas utuh — cara itu lambat dan cepat menghabiskan anggaran kon
 | `grep` | mencari isi berkas dengan regex; hasil berupa `path:baris: isi` |
 | `code_search` | meranking kode secara konseptual dari path, simbol, identifier, import, dan dependency |
 | `code_graph` | definisi, pemanggil, yang dipanggil, dan pewarisan satu simbol dari AST |
+| `change_impact` | graph blast radius dari file berubah ke importer, caller, subclass, dan test |
 | `test_impact` | menemukan test terdampak dan command test yang terkonfigurasi tanpa menjalankannya |
 | `repo_map` | outline file dan deklarasi lintas bahasa dengan filter query/path |
 | `git_status` / `git_diff` | membaca perubahan repository tanpa shell bebas |
@@ -1809,6 +2148,28 @@ mengakumulasi jumlahnya, dan `exec --json` menambahkan `prioritized_messages` pa
 event `context.trimmed`. Ranking hanya berlangsung di memori proses; prompt, source,
 dan istilah ranking tidak ditulis ke trace atau database.
 
+### Context Dependency Graph
+
+Ketika seleksi relevansi harus membuang history, Boo juga membangun graph ephemeral
+antarblok percakapan. Edge menghubungkan keputusan saat ini ke permintaan user yang
+melandasinya (`task`), rangkaian panggilan dan hasil tool (`causal`), pemeriksaan ke
+perubahan terakhir (`verification`), serta path/simbol/error yang muncul kembali
+(`anchor`). Dengan demikian, sebuah kesimpulan penting tidak dipertahankan sendirian
+tanpa task, bukti tool, atau perubahan yang membuatnya masuk akal.
+
+Closure dependency hanya diambil jika seluruh tambahan masih muat dalam context
+window. Penelusuran dibatasi depth 3 dan 12 blok; setiap blok maksimal memiliki
+8 dependency dan graph maksimal 512 edge. Jika closure terlalu mahal, Boo tetap
+mempertahankan kandidat terpenting, lalu mengisi sisa anggaran dengan ranking biasa.
+Pesan terbaru, urutan kronologis, seluruh system prompt, serta pasangan function
+call/result tetap mendapat jaminan yang sama.
+
+`/context` menampilkan estimasi pesan dan edge dependency yang akan dipakai. Saat
+trimming benar-benar terjadi, metrik yang sama tersedia di notice CLI/web,
+`/status`, `/stats`, dan field `dependency_messages`/`dependency_edges` pada event
+JSON `context.trimmed`. Graph, anchor, path, prompt, source, dan isi bukti tidak
+dipersistenkan; trace lokal hanya menyimpan jumlah agregat dan fitur tidak memakai DB.
+
 ## Safe Parallel Discovery Scheduler
 
 Jika model mengirim beberapa operasi discovery independen dalam satu response, Boo
@@ -2012,8 +2373,116 @@ memang tersedia di PATH atau gunakan path executable yang benar.
 
 Agent juga mempunyai tool `list_apps` dan `open_app`: ia hanya bisa membuka alias
 dari konfigurasi di atas dan tetap harus meminta izin Anda. Fitur ini **membuka atau
-menjalankan aplikasi**, bukan otomatis mengendalikan semua tombol UI-nya. Kontrol UI
-desktop perlu adapter API/CLI aplikasi atau izin automation OS tersendiri.
+menjalankan aplikasi**. Untuk mengendalikan UI native, gunakan computer-use bridge
+di bagian berikutnya.
+
+### Cross-platform Computer Use
+
+Boo mempunyai protokol accessibility yang sama untuk macOS, Windows, dan Linux.
+Bridge native berjalan sebagai proses lokal terpisah dan boleh memakai macOS
+Accessibility, Windows UI Automation, atau Linux AT-SPI. Model tidak mendapat shell,
+selector bebas, atau koordinat layar: ia hanya menerima referensi opaque dari
+snapshot terakhir dan dapat meminta klik, input teks, atau satu tombol allowlist.
+
+Daftarkan executable bridge absolut pada `~/.boo/computer.json`:
+
+```json
+{
+  "version": 1,
+  "bridges": {
+    "darwin": { "command": "/opt/boo/bin/boo-ax-macos", "args": [] },
+    "win32": { "command": "C:\\Boo\\boo-uia.exe", "args": [] },
+    "linux": { "command": "/opt/boo/bin/boo-atspi", "args": [] }
+  }
+}
+```
+
+Bridge membaca satu JSON dari stdin dan menulis satu JSON ke stdout. Action protokol
+versi 1 adalah `status`, `snapshot`, `click`, `type`, dan `press`. Snapshot dibatasi
+500 elemen dan setiap elemen harus membawa `ref`, `role`, serta `name`. Boo memulai
+bridge tanpa shell, membuang environment credential, membatasi output 1 MiB, dan
+menghentikannya setelah 15 detik.
+
+`computer_status` hanya memeriksa kesiapan. `computer_snapshot`, `computer_click`,
+`computer_type`, dan `computer_press` selalu meminta persetujuan baru. Password,
+token, OTP, dan data pembayaran tidak boleh diketik. Izin Accessibility/UI Automation
+tetap diberikan pengguna melalui pengaturan OS; Boo tidak mencoba melewatinya.
+
+### Background Agent & Scheduler
+
+Task agent dapat dijalankan berulang oleh daemon lokal tanpa database:
+
+```bash
+boo-code schedule add --every 30m -- "periksa test yang baru gagal dan laporkan"
+boo-code schedule add --daily 09:00 --full-auto -- "jalankan lint dan perbaiki masalah aman"
+boo-code schedule list
+boo-code daemon
+```
+
+Jadwal disimpan privat di `~/.boo/schedules.json`; maksimal 100 task, interval
+minimal satu menit, atau waktu harian lokal `HH:MM`. Daemon memakai lock PID tunggal,
+memulihkan lock basi setelah crash, melakukan claim sebelum run, dan tidak menjalankan
+dua tick secara tumpang tindih. Riwayat 200 hasil terakhir berada di JSONL lokal.
+
+Tanpa `--full-auto`, task terjadwal tidak menyetujui tindakan apa pun. Dengan
+`--full-auto`, hanya file workspace dan command lokal yang benar-benar disandbox
+yang dapat disetujui; computer use, remote node, pesan, MCP, dan aksi eksternal tetap
+ditolak. Agent interaktif juga dapat memakai `schedule_list`, `schedule_add`, dan
+`schedule_remove`, dengan approval baru untuk setiap perubahan jadwal.
+
+### Event Triggers
+
+Daemon yang sama dapat memulai task karena perubahan file, commit Git baru, event
+CI/custom, atau webhook lokal:
+
+```bash
+boo-code trigger add file --pattern "src/**/*.ts" --debounce 2s -- "jalankan test terkait"
+boo-code trigger add git -- "review commit baru"
+boo-code trigger add custom --event build.failed -- "diagnosis kegagalan CI"
+boo-code trigger emit build.failed
+boo-code trigger add webhook -- "proses notifikasi deployment"
+boo-code trigger list
+boo-code daemon
+```
+
+File dan Git dipantau dengan polling portabel sehingga perilakunya sama di macOS,
+Windows, dan Linux. Pengamatan pertama hanya membuat baseline; trigger baru berjalan
+setelah perubahan berikutnya stabil melewati debounce. Pola file harus relatif ke
+workspace dan folder dependensi/build/Git diabaikan. Event custom dapat dipanggil
+dari CI tanpa menyisipkan payload ke prompt.
+
+Webhook mendengarkan `127.0.0.1:7331` saja (port dapat diganti lewat
+`--webhook-port`). Perintah add menampilkan token 256-bit satu kali; Boo menyimpan
+hanya hash-nya dan mengharuskan `Authorization: Bearer <token>`. Request body dibatasi
+32 KiB lalu sengaja diabaikan agar instruksi dari luar tidak menjadi prompt. Gunakan
+reverse proxy ber-TLS atau SSH tunnel bila ingress perlu dijangkau dari device lain.
+
+Definisi berada di `~/.boo/triggers.json`, antrean di JSONL privat, dan log run hanya
+menyimpan id/source/waktu/exit code—bukan prompt, payload, token, atau output. Maksimal
+100 trigger dan 200 riwayat run. `--full-auto` tetap dibatasi seperti scheduler;
+computer use, remote node, pesan, MCP, dan aksi eksternal tidak disetujui otomatis.
+Agent dapat memakai `trigger_list`, `trigger_add`, dan `trigger_remove`; pembuatan
+webhook sengaja CLI-only agar token satu kalinya tidak pernah masuk konteks model.
+
+### Remote Device/Node
+
+Komputer lain dapat menjalankan endpoint Boo node yang sangat terbatas:
+
+```bash
+# Pada device tujuan (bridge computer use harus sudah dikonfigurasi)
+BOO_NODE_TOKEN="<token-base64url>" boo-code node serve --host 127.0.0.1 --port 7443
+
+# Pada controller; loopback cocok melalui SSH tunnel
+boo-code node pair --id laptop --label "Laptop kerja" \
+  --url http://127.0.0.1:7443 --token "<token-base64url>"
+boo-code node list
+```
+
+HTTP hanya diterima pada loopback; alamat LAN/internet wajib HTTPS dengan `--cert`
+dan `--key`. Token 256-bit disimpan mode `0600` di `~/.boo/nodes.json`, tidak pernah
+ditampilkan ke model, dan dibandingkan constant-time pada server. Protokol hanya
+menyediakan computer-use allowlist—tidak ada remote shell atau filesystem bebas.
+Setiap status/snapshot/klik/input/tombol remote meminta approval baru pada controller.
 
 ### Kontrol browser lokal lintas-platform
 
@@ -2139,6 +2608,7 @@ penerima.
 | `grep` | aman | langsung jalan |
 | `code_search` | aman | mencari konsep lewat indeks repository lokal |
 | `code_graph` | aman | membaca graf simbol AST dari indeks lokal |
+| `change_impact` | aman | menghitung blast radius dari graph repository tanpa menjalankan source |
 | `test_impact` | aman | menganalisis test terdampak dan command dari manifest/config proyek |
 | `repo_map` | aman | memetakan deklarasi tanpa mengirim isi file penuh |
 | `web_search` | aman | mencari web publik dan mengembalikan URL sumber |
@@ -2162,6 +2632,14 @@ penerima.
 | `memory_add`, `memory_remove` | konfirmasi setiap kali | mengubah satu catatan memori setelah isinya ditinjau |
 | `list_apps` | aman | melihat alias aplikasi lokal yang terdaftar |
 | `open_app` | konfirmasi | membuka satu alias aplikasi yang terdaftar |
+| `computer_status` | aman | memeriksa bridge accessibility lokal tanpa membaca UI |
+| `computer_snapshot` | konfirmasi setiap kali | membaca accessibility tree aplikasi aktif secara terbatas |
+| `computer_click`, `computer_type`, `computer_press` | konfirmasi setiap kali | mengendalikan referensi opaque dari snapshot native terbaru |
+| `schedule_list` | aman | melihat task agent terjadwal lokal |
+| `schedule_add`, `schedule_remove` | konfirmasi setiap kali | mengubah jadwal agent persisten |
+| `remote_node_list` | aman | melihat node yang dipasangkan tanpa token |
+| `remote_node_status`, `remote_node_snapshot` | konfirmasi setiap kali | mengakses status atau UI device terpasang |
+| `remote_node_click`, `remote_node_type`, `remote_node_press` | konfirmasi setiap kali | mengendalikan satu referensi UI remote tanpa shell |
 | `whatsapp_status` | aman | memeriksa kesiapan tab WhatsApp Web tanpa membaca chat atau credential |
 | `whatsapp_send_message` | konfirmasi setiap kali | mengirim satu pesan WhatsApp Web setelah penerima dan isi pesan ditinjau |
 | `write_file` | konfirmasi | minta izin tiap kali |
@@ -2384,9 +2862,21 @@ tetap dilaporkan berhasil. Yang dikirim ke model hanya 8 ribu karakter pertama d
 22 ribu karakter terakhir — tempat perintah dimulai dan tempat error biasanya
 muncul — dengan catatan berapa yang dilewati. Warna dan bilah progres dibuang.
 
-**Batas waktu.** Bawaan 120 detik. Model dapat menaikkannya per perintah sampai
-600 detik untuk build atau test yang memang lama. Saat habis, keluaran sejauh ini
-tetap dilaporkan.
+**Batas waktu adaptif.** Bila `timeout` tidak diberikan, Boo mengklasifikasikan
+command sebagai quick, test, build, install, network, long-running, atau general.
+Batas idle awalnya 45–300 detik sesuai kategori. Keluaran baru memperpanjang batas
+idle, sehingga build yang jelas masih maju tidak dibunuh hanya karena melewati satu
+angka tetap; hard cap 600 detik tetap berlaku agar proses tidak berjalan tanpa
+batas. `timeout` eksplisit tetap menjadi hard limit persis seperti yang diminta.
+
+Durasi dan kejadian timeout digabung secara lokal di
+`~/.boo/tool-timeouts.json`. Profil hanya menyimpan kategori, jumlah sampel, serta
+angka durasi—tidak menyimpan command, argumen, output, prompt, atau source code.
+Sesudah timeout, kategori tersebut otomatis memperoleh budget lebih realistis.
+Keluaran parsial tetap dilaporkan, UI memunculkan fase **Recovering**, dan agent
+diwajibkan memeriksa filesystem/status proses sebelum mengulang karena command
+mungkin sudah menghasilkan side effect. Server dan watcher tetap diarahkan ke
+`run_in_background`, bukan diperpanjang tanpa akhir.
 
 **Tidak menggantung menunggu jawaban.** Masukan standar ditutup secara bawaan,
 jadi perintah yang bertanya (`npm init`) langsung selesai, bukan menunggu sampai
@@ -2525,4 +3015,14 @@ Tiga perilaku 9Router yang sudah ditangani core dan jangan diubah tanpa pengujia
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm eval:validate
+pnpm test:providers:live --provider ninerouter --tools
 ```
+
+Workflow `.github/workflows/ci.yml` menjalankan typecheck, lint, seluruh test, dan
+validasi eval pada Ubuntu, macOS, serta Windows dengan Node 22.12 dan 24, lalu
+membangun tarball rilis. Workflow `provider-live.yml` hanya berjalan manual pada
+environment `provider-live`; secret provider tidak tersedia pada pull request dan
+tidak pernah dicetak. Live harness menguji daftar model, streaming teks, dan
+opsional function calling nyata. Karena memakai kuota, ia tidak menjadi bagian dari
+test rutin.

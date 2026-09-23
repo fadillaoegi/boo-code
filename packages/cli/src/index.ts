@@ -27,6 +27,8 @@ import {
   evaluatePermission,
   findSelection,
   formatTaskStatus,
+  formatProviderCapabilityProfile,
+  formatFailurePostmortem,
   groupModels,
   loadInstructions,
   loadSkills,
@@ -48,6 +50,8 @@ import {
   loadPromptCommands,
   loadHooks,
   loadPermissionPolicy,
+  loadProviderCapabilityProfile,
+  loadLatestFailurePostmortem,
   MAX_IMAGES_PER_MESSAGE,
   readSpec,
   revisePrompt,
@@ -123,6 +127,9 @@ import { renderTodos } from './todos.ts'
 import { banner, theme } from './theme.ts'
 import { runExec } from './exec.ts'
 import { diagnoseBoo, doctorExitCode, type DoctorConfig } from './doctor.ts'
+import { runDaemon, runScheduleCommand } from './scheduler.ts'
+import { runTriggerCommand } from './triggers.ts'
+import { runNodeCommand } from './node.ts'
 
 const DEFAULT_MODEL = 'ag/gemini-3.1-pro'
 
@@ -179,6 +186,10 @@ const USAGE = `${COMMAND} — coding agent oleh FLdev
   ${COMMAND} --verbose            tampilkan keluaran tool selengkapnya
   ${COMMAND} setup                siapkan alamat 9Router, kunci API, dan model bawaan
   ${COMMAND} doctor               periksa runtime, provider, sandbox, dan tool lokal
+  ${COMMAND} schedule ...         kelola task agent terjadwal lokal
+  ${COMMAND} trigger ...          kelola task berbasis event lokal
+  ${COMMAND} daemon [--once]      jalankan scheduler dan event trigger
+  ${COMMAND} node ...             pasangkan atau layani remote device
   ${COMMAND} --version            tampilkan versi
   ${COMMAND} --help               tampilkan bantuan ini
 
@@ -222,6 +233,8 @@ const HELP = `  /model          pilih model dengan tombol panah
   /compact        ringkas percakapan sejauh ini agar konteks lega
   /context        lihat pemakaian dan sumber konteks model
   /status         lihat tujuan, progres, file, tool, dan verifikasi task
+  /capabilities   lihat capability model yang dipelajari Auto secara lokal
+  /postmortem     jelaskan kegagalan task terakhir dari metadata lokal
   /review [base]  review perubahan tanpa mengedit file
   /stats          tampilkan metrik lokal 100 permintaan terakhir
   /doctor         periksa instalasi, provider, sandbox, dan integrasi opsional
@@ -477,6 +490,22 @@ async function showDoctor(workspace: string, config: DoctorConfig, sandboxStatus
 async function main() {
   if (process.argv[2] === 'exec') {
     process.exitCode = await runExec(process.argv.slice(3))
+    return
+  }
+  if (process.argv[2] === 'schedule') {
+    process.exitCode = await runScheduleCommand(process.argv.slice(3))
+    return
+  }
+  if (process.argv[2] === 'trigger') {
+    process.exitCode = await runTriggerCommand(process.argv.slice(3))
+    return
+  }
+  if (process.argv[2] === 'daemon') {
+    process.exitCode = await runDaemon(process.argv.slice(3))
+    return
+  }
+  if (process.argv[2] === 'node') {
+    process.exitCode = await runNodeCommand(process.argv.slice(3))
     return
   }
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
@@ -967,14 +996,21 @@ async function main() {
     }
     const models = Object.entries(stats.models).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name} ${count}×`).join(', ')
     const tools = Object.entries(stats.tools).sort((a, b) => b[1].calls - a[1].calls).slice(0, 5).map(([name, metric]) => `${name} ${metric.calls}×`).join(', ')
+    const failures = Object.entries(stats.failureCategories).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, count]) => `${name} ${count}×`).join(', ')
     console.log(`\n  ${theme.bold(`Metrik lokal · ${stats.runs} run terakhir`)}`)
     console.log(`  selesai ${stats.completed} · dibatalkan ${stats.cancelled} · berhenti ${stats.stopped} · error ${stats.errors}`)
     console.log(`  rata-rata ${shortDuration(stats.averageDurationMs)} · ${stats.averageTurns} turn · ${stats.averageToolCalls} tool call`)
     console.log(`  kegagalan tool ${stats.toolFailureRate}% · verifikasi belum tuntas ${stats.verificationIncomplete}`)
+    console.log(`  verification repair ${stats.verificationRepairRounds} putaran · ${stats.verificationRepairs} pulih · ${stats.verificationRepairExhausted} kehabisan batas`)
+    console.log(`  change impact ${stats.changeImpactAnalyses} analisis · ${stats.changeImpactAffectedFiles} file · ${stats.changeImpactEdges} relasi · ${stats.changeImpactLarge} blast radius besar`)
+    console.log(`  LSP session ${stats.lspSessionStarts} baru · ${stats.lspSessionReuses} reuse · ${stats.lspSessionRestarts} restart`)
     console.log(`  review otomatis ${stats.criticReviews} · temuan ${stats.criticFindings} · gagal ${stats.criticFailures} · risiko tinggi ${stats.highRiskRuns} · arahan live ${stats.steeringMessages}`)
     console.log(`  evidence cache ${stats.evidenceCacheHits} hit · ${stats.evidenceCacheSavedCharacters.toLocaleString('id-ID')} karakter dihemat · context relevance ${stats.contextPrioritizedMessages} pesan`)
+    console.log(`  context dependency ${stats.contextDependencyMessages} pesan · ${stats.contextDependencyEdges} relasi`)
     console.log(`  parallel discovery ${stats.parallelDiscoveryCalls} call · ${stats.parallelDiscoveryBatches} batch`)
     console.log(`  tool result store ${stats.truncatedToolResults} hasil besar · ${stats.deferredToolResultCharacters.toLocaleString('id-ID')} karakter ditahan`)
+    console.log(`  timeout recovery ${stats.toolTimeoutRecoveries}`)
+    if (failures) console.log(`  postmortem: ${failures}`)
     if (models) console.log(`  model: ${models}`)
     if (tools) console.log(`  tool: ${tools}`)
     console.log(`  ${theme.muted('Hanya metrik; prompt, kode, argumen, dan output tidak direkam.')}\n`)
@@ -996,7 +1032,10 @@ async function main() {
     console.log(`  hasil tool ${number(report.breakdown.toolResults)} · panggilan tool ${number(report.breakdown.toolCalls)} · skema tool ${number(report.breakdown.toolSchemas)} · gambar ${number(report.breakdown.images)}`)
     console.log(`  riwayat ${report.historyMessages} pesan · konteks aktif ${report.messages} pesan · dikirim ${report.sentMessages} pesan`)
     if (report.compactionActive) console.log(`  ${theme.muted(`${report.summarizedMessages} pesan lama sudah diganti ringkasan otomatis.`)}`)
-    if (report.droppedMessages) console.log(`  ${theme.danger(`${report.droppedMessages} pesan tidak muat; ${report.prioritizedMessages} pesan lama relevan akan dipertahankan.`)}`)
+    if (report.droppedMessages) {
+      console.log(`  ${theme.danger(`${report.droppedMessages} pesan tidak muat; ${report.prioritizedMessages} pesan lama relevan akan dipertahankan.`)}`)
+      if (report.dependencyMessages) console.log(`  ${theme.muted(`${report.dependencyMessages} pesan dependency dipertahankan melalui ${report.dependencyEdges} relasi context.`)}`)
+    }
     else if (report.pressure !== 'healthy') console.log(`  ${theme.muted('Gunakan /compact sekarang bila ingin memberi ruang sebelum task besar berikutnya.')}`)
     else console.log(`  ${theme.muted('Belum perlu compact; Boo akan meringkas otomatis saat mendekati batas.')}`)
     console.log()
@@ -1960,6 +1999,14 @@ async function main() {
       await showTaskStatus()
       continue
     }
+    if (input === '/capabilities') {
+      console.log(`\n  ${formatProviderCapabilityProfile(loadProviderCapabilityProfile(homedir())).replaceAll('\n', '\n  ')}\n`)
+      continue
+    }
+    if (input === '/postmortem') {
+      console.log(`\n  ${formatFailurePostmortem(loadLatestFailurePostmortem(homedir(), workspace)).replaceAll('\n', '\n  ')}\n`)
+      continue
+    }
     if (input === '/doctor') {
       await showDoctor(workspace, config, sandboxStatus)
       continue
@@ -2263,6 +2310,10 @@ async function main() {
             if (event.stage === 'started') status.activity('Exploring', `${event.calls} tool paralel · ${event.tools.join(', ')}`)
             break
 
+          case 'tool-recovery':
+            status.activity('Recovering', `${event.category} timeout · batas berikutnya ${Math.ceil(event.nextIdleTimeoutMs / 1_000)}s`)
+            break
+
           case 'tool-denied':
             // Keputusannya sudah dicatat oleh panel izin. Fase yang dibuka hanya untuk
             // tool yang ditolak ini dibuang agar tidak membeku sebagai ringkasan kosong.
@@ -2363,10 +2414,33 @@ async function main() {
               : event.commands?.[0] ?? event.files.join(', '))
             break
 
+          case 'change-impact':
+            finishAnswer()
+            status.activity('Checking', `${event.affectedFiles} file terdampak · ${event.edges} relasi · blast radius ${event.blastRadius}${event.truncated ? ' · dibatasi' : ''}`)
+            break
+
+          case 'lsp-session':
+            finishAnswer()
+            status.activity(event.stage === 'reused' ? 'Checking' : 'Starting', `LSP ${event.stage} · ${event.openDocuments} dokumen aktif`)
+            break
+
           case 'verification-incomplete':
             finishAnswer()
             status.commit()
             emit(`  ${theme.danger('!')} ${theme.muted(`${event.attempted ? 'Verifikasi belum berhasil' : 'Belum ada verifikasi'} untuk ${event.files.join(', ')}`)}\n`)
+            break
+
+          case 'verification-repair':
+            finishAnswer()
+            if (event.stage === 'repaired') {
+              status.commit()
+              emit(`  ${theme.accent('✓')} ${theme.muted(`Verification repair berhasil · ${event.round} putaran`)}\n`)
+            } else if (event.stage === 'exhausted') {
+              status.commit()
+              emit(`  ${theme.danger('!')} ${theme.muted(`Verification repair berhenti aman setelah ${event.round}/${event.maxRounds} putaran`)}\n`)
+            } else {
+              status.activity('Repairing', `verifikasi · putaran ${event.round}/${event.maxRounds}`)
+            }
             break
 
           case 'critic-start':
@@ -2430,7 +2504,7 @@ async function main() {
           case 'context-trimmed':
             status.clear()
             if (midLine) emit('\n')
-            emit(`  ${theme.muted(`konteks dipangkas: ${event.droppedMessages} pesan dibuang, ${event.prioritizedMessages} pesan relevan lama dipertahankan (~${event.estimatedTokens} token terkirim)`)}\n`)
+            emit(`  ${theme.muted(`konteks dipangkas: ${event.droppedMessages} pesan dibuang, ${event.prioritizedMessages} pesan relevan lama dipertahankan${event.dependencyMessages ? `, ${event.dependencyMessages} pesan dependency melalui ${event.dependencyEdges ?? 0} relasi` : ''} (~${event.estimatedTokens} token terkirim)`)}\n`)
             break
 
           case 'workspace-changed': {
@@ -2448,6 +2522,12 @@ async function main() {
             status.clear()
             finishAnswer()
             emit(`\n  ${theme.danger('error')} ${event.message}\n`)
+            break
+
+          case 'failure-postmortem':
+            status.clear()
+            finishAnswer()
+            emit(`  ${theme.muted(formatFailurePostmortem(event.report).replaceAll('\n', '\n  '))}\n`)
             break
 
           default:

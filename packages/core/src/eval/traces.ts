@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { AgentEvent } from '../agent/loop.ts'
+import type { FailureCategory } from '../agent/postmortem.ts'
 
 export const TRACE_SCHEMA_VERSION = 1
 export const TRACE_DIRECTORY = 'traces'
@@ -34,6 +35,7 @@ export interface RunTraceSummary {
   difficulty?: string
   routingSource?: string
   routingPolicy?: string
+  failureCategory?: FailureCategory
   requestCharacters: number
   outcome: TraceOutcome
   turns: number
@@ -43,6 +45,19 @@ export interface RunTraceSummary {
   toolDenied: number
   verificationRequested: boolean
   verificationIncomplete: boolean
+  /** Putaran tertinggi yang dipakai loop repair verifikasi. */
+  verificationRepairRounds?: number
+  /** Jumlah kegagalan verifikasi yang berhasil dipulihkan. */
+  verificationRepairs?: number
+  /** Jumlah loop repair yang berakhir setelah batas putaran habis. */
+  verificationRepairExhausted?: number
+  changeImpactAnalyses?: number
+  changeImpactAffectedFiles?: number
+  changeImpactEdges?: number
+  changeImpactLarge?: number
+  lspSessionStarts?: number
+  lspSessionReuses?: number
+  lspSessionRestarts?: number
   criticReviews: number
   criticFindings: number
   criticFailures: number
@@ -50,6 +65,8 @@ export interface RunTraceSummary {
   riskLevel?: 'low' | 'medium' | 'high'
   contextTrims: number
   contextPrioritizedMessages: number
+  contextDependencyMessages?: number
+  contextDependencyEdges?: number
   parallelDiscoveryBatches: number
   parallelDiscoveryCalls: number
   truncatedToolResults: number
@@ -63,6 +80,8 @@ export interface RunTraceSummary {
   toolProtocolStops: number
   evidenceCacheHits: number
   evidenceCacheSavedCharacters: number
+  /** Jumlah timeout tool yang membawa jalur recovery terstruktur. */
+  toolTimeoutRecoveries?: number
   tools: Record<string, ToolTraceMetric>
 }
 
@@ -77,18 +96,32 @@ export interface TraceAggregate {
   averageToolCalls: number
   toolFailureRate: number
   verificationIncomplete: number
+  verificationRepairRounds: number
+  verificationRepairs: number
+  verificationRepairExhausted: number
+  changeImpactAnalyses: number
+  changeImpactAffectedFiles: number
+  changeImpactEdges: number
+  changeImpactLarge: number
+  lspSessionStarts: number
+  lspSessionReuses: number
+  lspSessionRestarts: number
   criticReviews: number
   criticFindings: number
   criticFailures: number
   steeringMessages: number
   highRiskRuns: number
   contextPrioritizedMessages: number
+  contextDependencyMessages: number
+  contextDependencyEdges: number
   parallelDiscoveryBatches: number
   parallelDiscoveryCalls: number
   truncatedToolResults: number
   deferredToolResultCharacters: number
   evidenceCacheHits: number
   evidenceCacheSavedCharacters: number
+  toolTimeoutRecoveries: number
+  failureCategories: Partial<Record<FailureCategory, number>>
   models: Record<string, number>
   tools: Record<string, ToolTraceMetric>
 }
@@ -136,6 +169,16 @@ export class LocalRunTrace {
   private toolDenied = 0
   private verificationRequested = false
   private verificationIncomplete = false
+  private verificationRepairRounds = 0
+  private verificationRepairs = 0
+  private verificationRepairExhausted = 0
+  private changeImpactAnalyses = 0
+  private changeImpactAffectedFiles = 0
+  private changeImpactEdges = 0
+  private changeImpactLarge = 0
+  private lspSessionStarts = 0
+  private lspSessionReuses = 0
+  private lspSessionRestarts = 0
   private criticReviews = 0
   private criticFindings = 0
   private criticFailures = 0
@@ -143,6 +186,8 @@ export class LocalRunTrace {
   private riskLevel: 'low' | 'medium' | 'high' | undefined
   private contextTrims = 0
   private contextPrioritizedMessages = 0
+  private contextDependencyMessages = 0
+  private contextDependencyEdges = 0
   private parallelDiscoveryBatches = 0
   private parallelDiscoveryCalls = 0
   private truncatedToolResults = 0
@@ -153,11 +198,13 @@ export class LocalRunTrace {
   private toolProtocolStops = 0
   private evidenceCacheHits = 0
   private evidenceCacheSavedCharacters = 0
+  private toolTimeoutRecoveries = 0
   private selectedModel: string | undefined
   private selectedEffort: string | undefined
   private difficulty: string | undefined
   private routingSource: string | undefined
   private routingPolicy: string | undefined
+  private failureCategory: FailureCategory | undefined
   private inferredOutcome: TraceOutcome = 'completed'
   private finished = false
 
@@ -206,6 +253,9 @@ export class LocalRunTrace {
         this.evidenceCacheHits += 1
         this.evidenceCacheSavedCharacters += event.savedCharacters
         break
+      case 'tool-recovery':
+        if (event.kind === 'timeout') this.toolTimeoutRecoveries += 1
+        break
       case 'tool-denied':
         this.toolDenied += 1
         this.startedTools.delete(event.callId)
@@ -226,6 +276,22 @@ export class LocalRunTrace {
       case 'verification-incomplete':
         this.verificationIncomplete = true
         break
+      case 'verification-repair':
+        this.verificationRepairRounds = Math.max(this.verificationRepairRounds, event.round)
+        if (event.stage === 'repaired') this.verificationRepairs += 1
+        else if (event.stage === 'exhausted') this.verificationRepairExhausted += 1
+        break
+      case 'change-impact':
+        this.changeImpactAnalyses += 1
+        this.changeImpactAffectedFiles += event.affectedFiles
+        this.changeImpactEdges += event.edges
+        if (event.blastRadius === 'large') this.changeImpactLarge += 1
+        break
+      case 'lsp-session':
+        if (event.stage === 'started') this.lspSessionStarts += 1
+        else if (event.stage === 'reused') this.lspSessionReuses += 1
+        else this.lspSessionRestarts += 1
+        break
       case 'critic-start':
         this.criticReviews += 1
         break
@@ -244,6 +310,9 @@ export class LocalRunTrace {
       case 'prompt-injection-detected':
         // Kejadian dihitung sebagai guardrail, tanpa menyimpan isi data atau path.
         break
+      case 'failure-postmortem':
+        this.failureCategory = event.report.category
+        break
       case 'tool-loop':
         if (event.stage === 'stopped') this.inferredOutcome = 'stopped'
         break
@@ -258,6 +327,8 @@ export class LocalRunTrace {
       case 'context-trimmed':
         this.contextTrims += 1
         this.contextPrioritizedMessages += event.prioritizedMessages
+        this.contextDependencyMessages += event.dependencyMessages ?? 0
+        this.contextDependencyEdges += event.dependencyEdges ?? 0
         break
       case 'tool-parallel':
         if (event.stage === 'started') {
@@ -305,6 +376,7 @@ export class LocalRunTrace {
       ...(this.difficulty ? { difficulty: this.difficulty } : {}),
       ...(this.routingSource ? { routingSource: this.routingSource } : {}),
       ...(this.routingPolicy ? { routingPolicy: this.routingPolicy } : {}),
+      ...(this.failureCategory ? { failureCategory: this.failureCategory } : {}),
       requestCharacters: Math.max(0, this.options.requestCharacters),
       outcome,
       turns: this.turns,
@@ -314,6 +386,16 @@ export class LocalRunTrace {
       toolDenied: this.toolDenied,
       verificationRequested: this.verificationRequested,
       verificationIncomplete: this.verificationIncomplete,
+      verificationRepairRounds: this.verificationRepairRounds,
+      verificationRepairs: this.verificationRepairs,
+      verificationRepairExhausted: this.verificationRepairExhausted,
+      changeImpactAnalyses: this.changeImpactAnalyses,
+      changeImpactAffectedFiles: this.changeImpactAffectedFiles,
+      changeImpactEdges: this.changeImpactEdges,
+      changeImpactLarge: this.changeImpactLarge,
+      lspSessionStarts: this.lspSessionStarts,
+      lspSessionReuses: this.lspSessionReuses,
+      lspSessionRestarts: this.lspSessionRestarts,
       criticReviews: this.criticReviews,
       criticFindings: this.criticFindings,
       criticFailures: this.criticFailures,
@@ -321,6 +403,8 @@ export class LocalRunTrace {
       ...(this.riskLevel ? { riskLevel: this.riskLevel } : {}),
       contextTrims: this.contextTrims,
       contextPrioritizedMessages: this.contextPrioritizedMessages,
+      contextDependencyMessages: this.contextDependencyMessages,
+      contextDependencyEdges: this.contextDependencyEdges,
       parallelDiscoveryBatches: this.parallelDiscoveryBatches,
       parallelDiscoveryCalls: this.parallelDiscoveryCalls,
       truncatedToolResults: this.truncatedToolResults,
@@ -331,6 +415,7 @@ export class LocalRunTrace {
       toolProtocolStops: this.toolProtocolStops,
       evidenceCacheHits: this.evidenceCacheHits,
       evidenceCacheSavedCharacters: this.evidenceCacheSavedCharacters,
+      toolTimeoutRecoveries: this.toolTimeoutRecoveries,
       tools: this.tools,
     }
     const root = traceRoot(this.options.home)
@@ -367,6 +452,7 @@ export function aggregateLocalTraces(home: string, workspace: string, limit = 10
   const traces = readTraces(home, workspace, Math.max(1, Math.min(MAX_READ_TRACES, limit)))
   const models: Record<string, number> = {}
   const tools: Record<string, ToolTraceMetric> = {}
+  const failureCategories: Partial<Record<FailureCategory, number>> = {}
   let duration = 0
   let turns = 0
   let calls = 0
@@ -378,6 +464,7 @@ export function aggregateLocalTraces(home: string, workspace: string, limit = 10
     failures += trace.toolFailures
     const model = trace.selectedModel ?? trace.initialModel
     models[model] = (models[model] ?? 0) + 1
+    if (trace.failureCategory) failureCategories[trace.failureCategory] = (failureCategories[trace.failureCategory] ?? 0) + 1
     for (const [name, metric] of Object.entries(trace.tools)) {
       const total = tools[name] ?? { calls: 0, failures: 0, durationMs: 0 }
       total.calls += metric.calls
@@ -397,18 +484,32 @@ export function aggregateLocalTraces(home: string, workspace: string, limit = 10
     averageToolCalls: traces.length ? rounded(calls / traces.length) : 0,
     toolFailureRate: calls ? rounded((failures / calls) * 100) : 0,
     verificationIncomplete: traces.filter((trace) => trace.verificationIncomplete).length,
+    verificationRepairRounds: traces.reduce((sum, trace) => sum + (trace.verificationRepairRounds ?? 0), 0),
+    verificationRepairs: traces.reduce((sum, trace) => sum + (trace.verificationRepairs ?? 0), 0),
+    verificationRepairExhausted: traces.reduce((sum, trace) => sum + (trace.verificationRepairExhausted ?? 0), 0),
+    changeImpactAnalyses: traces.reduce((sum, trace) => sum + (trace.changeImpactAnalyses ?? 0), 0),
+    changeImpactAffectedFiles: traces.reduce((sum, trace) => sum + (trace.changeImpactAffectedFiles ?? 0), 0),
+    changeImpactEdges: traces.reduce((sum, trace) => sum + (trace.changeImpactEdges ?? 0), 0),
+    changeImpactLarge: traces.reduce((sum, trace) => sum + (trace.changeImpactLarge ?? 0), 0),
+    lspSessionStarts: traces.reduce((sum, trace) => sum + (trace.lspSessionStarts ?? 0), 0),
+    lspSessionReuses: traces.reduce((sum, trace) => sum + (trace.lspSessionReuses ?? 0), 0),
+    lspSessionRestarts: traces.reduce((sum, trace) => sum + (trace.lspSessionRestarts ?? 0), 0),
     criticReviews: traces.reduce((sum, trace) => sum + (trace.criticReviews ?? 0), 0),
     criticFindings: traces.reduce((sum, trace) => sum + (trace.criticFindings ?? 0), 0),
     criticFailures: traces.reduce((sum, trace) => sum + (trace.criticFailures ?? 0), 0),
     steeringMessages: traces.reduce((sum, trace) => sum + (trace.steeringMessages ?? 0), 0),
     highRiskRuns: traces.filter((trace) => trace.riskLevel === 'high').length,
     contextPrioritizedMessages: traces.reduce((sum, trace) => sum + (trace.contextPrioritizedMessages ?? 0), 0),
+    contextDependencyMessages: traces.reduce((sum, trace) => sum + (trace.contextDependencyMessages ?? 0), 0),
+    contextDependencyEdges: traces.reduce((sum, trace) => sum + (trace.contextDependencyEdges ?? 0), 0),
     parallelDiscoveryBatches: traces.reduce((sum, trace) => sum + (trace.parallelDiscoveryBatches ?? trace.parallelReadBatches ?? 0), 0),
     parallelDiscoveryCalls: traces.reduce((sum, trace) => sum + (trace.parallelDiscoveryCalls ?? trace.parallelReadCalls ?? 0), 0),
     truncatedToolResults: traces.reduce((sum, trace) => sum + (trace.truncatedToolResults ?? 0), 0),
     deferredToolResultCharacters: traces.reduce((sum, trace) => sum + (trace.deferredToolResultCharacters ?? 0), 0),
     evidenceCacheHits: traces.reduce((sum, trace) => sum + (trace.evidenceCacheHits ?? 0), 0),
     evidenceCacheSavedCharacters: traces.reduce((sum, trace) => sum + (trace.evidenceCacheSavedCharacters ?? 0), 0),
+    toolTimeoutRecoveries: traces.reduce((sum, trace) => sum + (trace.toolTimeoutRecoveries ?? 0), 0),
+    failureCategories,
     models,
     tools,
   }

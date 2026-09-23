@@ -17,7 +17,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
+import { commandEnvironment } from './commandEnvironment.ts'
 import { sandboxLaunch, type SandboxPolicy, type SandboxStatus } from './sandbox.ts'
+
+export { commandEnvironment } from './commandEnvironment.ts'
 
 /** Shell yang sintaks `-c`-nya kompatibel; fish dan nushell tidak termasuk. */
 const POSIX_SHELLS = new Set(['bash', 'zsh', 'sh', 'dash', 'ksh'])
@@ -148,22 +151,16 @@ export interface StartOptions {
 
 const sandboxByChild = new WeakMap<ChildProcess, SandboxStatus>()
 
-/** Environment agent shell tidak mewarisi credential proses Boo. */
-export function commandEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const blocked = /(?:^|_)(?:API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:$|_)/i
-  const exact = new Set(['NINEROUTER_KEY', 'DATABASE_URL', 'SSH_AUTH_SOCK', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'])
-  return Object.fromEntries(Object.entries(env).filter(([key]) => !exact.has(key) && !blocked.test(key)))
-}
-
 /** Memulai perintah. Masukan standar ditutup, jadi perintah yang bertanya tidak menggantung. */
 export function startCommand(command: string, { cwd, onOutput, shell = resolveShell(), sandbox = { mode: 'workspace-write' }, stdin = 'ignore' }: StartOptions): ChildProcess {
-  const launch = sandboxLaunch(shell, command, cwd, sandbox)
+  const env = { ...commandEnvironment(), TERM: 'dumb', NO_COLOR: '1', FORCE_COLOR: '0' }
+  const launch = sandboxLaunch(shell, command, cwd, sandbox, process.platform, existsSync, env)
   const child = spawn(launch.file, launch.args, {
     cwd,
     stdio: [stdin, 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
     windowsVerbatimArguments: process.platform === 'win32' && launch.status.backend === 'none',
-    env: { ...commandEnvironment(), TERM: 'dumb', NO_COLOR: '1', FORCE_COLOR: '0' },
+    env,
   })
   sandboxByChild.set(child, launch.status)
   installExitHook()
@@ -183,6 +180,8 @@ export interface CommandResult {
   output: string
   exitCode: number | null
   timedOut: boolean
+  timeoutReason?: 'idle' | 'maximum'
+  durationMs: number
   cancelled: boolean
   /** Shell gagal dijalankan sama sekali. */
   spawnError?: string
@@ -190,46 +189,77 @@ export interface CommandResult {
 }
 
 export interface RunOptions extends StartOptions {
+  /** Batas tanpa keluaran baru. Tanpa maxRuntimeMs, ini tetap hard timeout lama. */
   timeoutMs: number
+  /** Hard cap opsional untuk command adaptif yang terus menunjukkan progres. */
+  maxRuntimeMs?: number
   signal?: AbortSignal
 }
 
 /** Menjalankan perintah sampai selesai, habis waktu, atau dihentikan pengguna. */
 export function runCommand(command: string, options: RunOptions): Promise<CommandResult> {
   const buffer = new OutputBuffer()
-  const { signal, timeoutMs, onOutput } = options
+  const { signal, timeoutMs, maxRuntimeMs, onOutput } = options
+  const startedAt = Date.now()
 
   return new Promise((resolve) => {
     if (signal?.aborted) {
       const sandbox = sandboxLaunch(options.shell ?? resolveShell(), command, options.cwd, options.sandbox ?? { mode: 'workspace-write' }).status
-      resolve({ output: '', exitCode: null, timedOut: false, cancelled: true, sandbox })
+      resolve({ output: '', exitCode: null, timedOut: false, durationMs: 0, cancelled: true, sandbox })
       return
+    }
+    let idleTimer: NodeJS.Timeout | undefined
+    let maximumTimer: NodeJS.Timeout | undefined
+    let timeoutReason: CommandResult['timeoutReason']
+    const expire = (reason: NonNullable<CommandResult['timeoutReason']>) => {
+      if (timeoutReason) return
+      timeoutReason = reason
+      terminate(child)
+    }
+    const resetIdleTimer = () => {
+      if (!maxRuntimeMs) return
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => expire('idle'), timeoutMs)
     }
     const child = startCommand(command, {
       ...options,
       onOutput: (chunk) => {
         buffer.append(chunk)
         onOutput?.(chunk)
+        resetIdleTimer()
       },
     })
     const sandbox = sandboxByChild.get(child) ?? sandboxLaunch(options.shell ?? resolveShell(), command, options.cwd, options.sandbox ?? { mode: 'workspace-write' }).status
 
-    let timedOut = false
     let cancelled = false
-    const timer = setTimeout(() => {
-      timedOut = true
-      terminate(child)
-    }, timeoutMs)
+    if (maxRuntimeMs) {
+      resetIdleTimer()
+      maximumTimer = setTimeout(() => expire('maximum'), Math.max(timeoutMs, maxRuntimeMs))
+    } else {
+      maximumTimer = setTimeout(() => expire('maximum'), timeoutMs)
+    }
     const onAbort = () => {
       cancelled = true
       terminate(child)
     }
     signal?.addEventListener('abort', onAbort, { once: true })
 
-    const finish = (result: Omit<CommandResult, 'output' | 'timedOut' | 'cancelled' | 'sandbox'>) => {
-      clearTimeout(timer)
+    let finished = false
+    const finish = (result: Pick<CommandResult, 'exitCode' | 'spawnError'>) => {
+      if (finished) return
+      finished = true
+      if (idleTimer) clearTimeout(idleTimer)
+      if (maximumTimer) clearTimeout(maximumTimer)
       signal?.removeEventListener('abort', onAbort)
-      resolve({ output: buffer.toString(), timedOut, cancelled, sandbox, ...result })
+      resolve({
+        output: buffer.toString(),
+        timedOut: Boolean(timeoutReason),
+        ...(timeoutReason ? { timeoutReason } : {}),
+        durationMs: Math.max(0, Date.now() - startedAt),
+        cancelled,
+        sandbox,
+        ...result,
+      })
     }
     child.once('error', (error) => finish({ exitCode: null, spawnError: error.message }))
     // 'close', bukan 'exit': keluaran yang masih di pipa harus terbaca seluruhnya.

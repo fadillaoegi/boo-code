@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { extname, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -28,6 +29,22 @@ interface Pending {
   reject(error: Error): void
   timer: NodeJS.Timeout
   cleanup(): void
+}
+
+export const LSP_SESSION_IDLE_MS = 5 * 60_000
+export const MAX_LSP_SESSIONS = 4
+export const MAX_LSP_OPEN_DOCUMENTS = 40
+
+export interface LspSessionMetric {
+  reused: boolean
+  restarted: boolean
+  openDocuments: number
+}
+
+export interface LspQueryResult {
+  content: string
+  hasErrors?: boolean
+  session: LspSessionMetric
 }
 
 function quote(value: string, platform: NodeJS.Platform = process.platform): string {
@@ -74,11 +91,20 @@ class LspConnection {
 
   constructor(command: string, workspace: string, sandbox?: SandboxPolicy) {
     this.child = startCommand(command, { cwd: workspace, sandbox, stdin: 'pipe' })
+    this.child.unref()
+    ;(this.child.stdin as { unref?: () => void } | null)?.unref?.()
+    ;(this.child.stdout as { unref?: () => void } | null)?.unref?.()
+    ;(this.child.stderr as { unref?: () => void } | null)?.unref?.()
     this.child.stdout?.on('data', (chunk: Buffer | string) => this.consume(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
     this.child.stderr?.on('data', (chunk: Buffer | string) => this.stderr.append(chunk.toString()))
-    this.child.once('error', (error) => this.failAll(new Error(`Language server gagal dimulai: ${error.message}`, { cause: error })))
+    this.child.once('error', (error) => {
+      this.ended = true
+      this.failAll(new Error(`Language server gagal dimulai: ${error.message}`, { cause: error }))
+    })
     this.child.once('close', (code) => {
-      if (!this.ended) this.failAll(new Error(`Language server berhenti (exit ${code ?? '?'}). ${this.stderr.toString()}`.trim()))
+      const expected = this.ended
+      this.ended = true
+      if (!expected) this.failAll(new Error(`Language server berhenti (exit ${code ?? '?'}). ${this.stderr.toString()}`.trim()))
     })
   }
 
@@ -168,6 +194,8 @@ class LspConnection {
     return () => this.notifications.delete(listener)
   }
 
+  get alive(): boolean { return !this.ended }
+
   private failAll(error: Error): void {
     for (const item of this.pending.values()) {
       clearTimeout(item.timer)
@@ -179,13 +207,168 @@ class LspConnection {
 
   async close(timeoutMs = 2_000): Promise<void> {
     if (this.ended) return
-    this.ended = true
     try { await this.request('shutdown', null, timeoutMs) } catch { /* server sudah berhenti */ }
     try { this.notify('exit', null) } catch { /* stdin sudah tertutup */ }
+    this.ended = true
     this.child.stdin?.end()
     terminate(this.child, 500)
   }
 }
+
+interface OpenDocument { hash: string; version: number; touchedAt: number }
+
+class PersistentLspSession {
+  readonly connection: LspConnection
+  readonly documents = new Map<string, OpenDocument>()
+  lastUsedAt = Date.now()
+  private queue: Promise<unknown> = Promise.resolve()
+
+  private constructor(connection: LspConnection) {
+    this.connection = connection
+  }
+
+  static async create(workspace: string, server: LspServerDefinition, sandbox: SandboxPolicy | undefined, timeoutMs: number, signal?: AbortSignal): Promise<PersistentLspSession> {
+    const connection = new LspConnection(server.command, workspace, sandbox)
+    const session = new PersistentLspSession(connection)
+    const rootUri = pathToFileURL(resolve(workspace)).href
+    try {
+      await connection.request('initialize', {
+        processId: process.pid,
+        clientInfo: { name: 'Boo Code', version: '0.1.0' },
+        rootUri,
+        workspaceFolders: [{ uri: rootUri, name: resolve(workspace).split(sep).at(-1) || 'workspace' }],
+        capabilities: {
+          workspace: { workspaceFolders: true, configuration: true },
+          textDocument: { synchronization: { didSave: true }, documentSymbol: {}, definition: {}, references: {}, hover: {}, diagnostic: {} },
+        },
+      }, timeoutMs, signal)
+      connection.notify('initialized', {})
+      return session
+    } catch (error) {
+      await connection.close()
+      throw error
+    }
+  }
+
+  get alive(): boolean { return this.connection.alive }
+
+  runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(operation, operation)
+    this.queue = next.then(() => undefined, () => undefined)
+    return next
+  }
+
+  syncDocument(uri: string, languageId: string, content: string): void {
+    const hash = createHash('sha256').update(content).digest('hex')
+    const current = this.documents.get(uri)
+    this.lastUsedAt = Date.now()
+    if (!current) {
+      this.connection.notify('textDocument/didOpen', { textDocument: { uri, languageId, version: 1, text: content } })
+      this.documents.set(uri, { hash, version: 1, touchedAt: this.lastUsedAt })
+    } else if (current.hash !== hash) {
+      current.hash = hash
+      current.version += 1
+      current.touchedAt = this.lastUsedAt
+      this.connection.notify('textDocument/didChange', { textDocument: { uri, version: current.version }, contentChanges: [{ text: content }] })
+    } else current.touchedAt = this.lastUsedAt
+    this.evictDocuments(uri)
+  }
+
+  private evictDocuments(activeUri: string): void {
+    if (this.documents.size <= MAX_LSP_OPEN_DOCUMENTS) return
+    const oldest = [...this.documents.entries()]
+      .filter(([uri]) => uri !== activeUri)
+      .sort((a, b) => a[1].touchedAt - b[1].touchedAt)
+      .slice(0, this.documents.size - MAX_LSP_OPEN_DOCUMENTS)
+    for (const [uri] of oldest) {
+      try { this.connection.notify('textDocument/didClose', { textDocument: { uri } }) } catch { /* session akan dipulihkan pada query berikutnya */ }
+      this.documents.delete(uri)
+    }
+  }
+
+  async close(): Promise<void> { await this.connection.close() }
+}
+
+interface PoolEntry { key: string; session: PersistentLspSession; idle?: NodeJS.Timeout }
+
+class LspSessionPool {
+  private readonly entries = new Map<string, PoolEntry>()
+  private readonly creating = new Map<string, Promise<PersistentLspSession>>()
+
+  private key(workspace: string, server: LspServerDefinition, sandbox?: SandboxPolicy): string {
+    return `${resolve(workspace)}\0${server.command}\0${sandbox?.mode ?? 'workspace-write'}\0${Boolean(sandbox?.networkAccess)}`
+  }
+
+  async acquire(workspace: string, server: LspServerDefinition, sandbox: SandboxPolicy | undefined, timeoutMs: number, signal?: AbortSignal): Promise<{ entry: PoolEntry; reused: boolean }> {
+    const key = this.key(workspace, server, sandbox)
+    const existing = this.entries.get(key)
+    if (existing?.session.alive) {
+      this.touch(existing)
+      return { entry: existing, reused: true }
+    }
+    if (existing) await this.remove(key)
+    let pending = this.creating.get(key)
+    const reusedCreation = Boolean(pending)
+    if (!pending) {
+      pending = PersistentLspSession.create(workspace, server, sandbox, timeoutMs, signal)
+      this.creating.set(key, pending)
+    }
+    try {
+      const session = await pending
+      let entry = this.entries.get(key)
+      if (!entry) {
+        entry = { key, session }
+        this.entries.set(key, entry)
+        this.touch(entry)
+        await this.enforceLimit(key)
+      }
+      return { entry, reused: reusedCreation }
+    } finally {
+      if (this.creating.get(key) === pending) this.creating.delete(key)
+    }
+  }
+
+  touch(entry: PoolEntry): void {
+    entry.session.lastUsedAt = Date.now()
+    if (entry.idle) clearTimeout(entry.idle)
+    entry.idle = setTimeout(() => { void this.remove(entry.key) }, LSP_SESSION_IDLE_MS)
+    entry.idle.unref?.()
+  }
+
+  async invalidate(entry: PoolEntry): Promise<void> {
+    if (this.entries.get(entry.key) === entry) await this.remove(entry.key)
+  }
+
+  private async enforceLimit(activeKey: string): Promise<void> {
+    if (this.entries.size <= MAX_LSP_SESSIONS) return
+    const oldest = [...this.entries.values()]
+      .filter((entry) => entry.key !== activeKey)
+      .sort((a, b) => a.session.lastUsedAt - b.session.lastUsedAt)[0]
+    if (oldest) await this.remove(oldest.key)
+  }
+
+  private async remove(key: string): Promise<void> {
+    const entry = this.entries.get(key)
+    if (!entry) return
+    this.entries.delete(key)
+    if (entry.idle) clearTimeout(entry.idle)
+    await entry.session.close()
+  }
+
+  async closeAll(): Promise<void> {
+    await Promise.all([...this.entries.keys()].map((key) => this.remove(key)))
+  }
+
+  snapshot(): { sessions: number; openDocuments: number } {
+    return { sessions: this.entries.size, openDocuments: [...this.entries.values()].reduce((sum, entry) => sum + entry.session.documents.size, 0) }
+  }
+}
+
+const lspSessions = new LspSessionPool()
+
+/** Test/host lifecycle hook; normal CLI sessions are reclaimed by idle timeout. */
+export async function closeLspSessions(): Promise<void> { await lspSessions.closeAll() }
+export function lspSessionSnapshot(): { sessions: number; openDocuments: number } { return lspSessions.snapshot() }
 
 const SYMBOL_KIND: Record<number, string> = {
   2: 'module', 3: 'namespace', 5: 'class', 6: 'method', 7: 'property', 8: 'field', 9: 'constructor',
@@ -269,8 +452,8 @@ function pullDiagnostics(result: unknown): Diagnostic[] | null {
 export async function runLspQuery(
   workspace: string,
   query: LspQuery,
-  options: { server?: LspServerDefinition; sandbox?: SandboxPolicy; signal?: AbortSignal } = {},
-): Promise<{ content: string; hasErrors?: boolean }> {
+  options: { server?: LspServerDefinition; sandbox?: SandboxPolicy; signal?: AbortSignal; persistent?: boolean } = {},
+): Promise<LspQueryResult> {
   if (!new Set<LspAction>(['document_symbols', 'definition', 'references', 'hover', 'diagnostics']).has(query.action)) {
     throw new Error(`Action LSP tidak dikenal: ${String(query.action)}`)
   }
@@ -278,72 +461,77 @@ export async function runLspQuery(
   const server = options.server ?? languageServerFor(workspace, query.path)
   if (!server) throw new Error(`Belum ada adapter language server untuk ${extname(query.path) || 'tipe file ini'}.`)
   const timeoutMs = Math.max(3, Math.min(120, Number.isFinite(query.timeout) ? Math.round(query.timeout!) : 30)) * 1_000
+  if (query.action === 'definition' || query.action === 'references' || query.action === 'hover') position(query.line, query.column)
   const content = await readFile(target, 'utf8')
   const uri = pathToFileURL(target).href
-  const rootUri = pathToFileURL(resolve(workspace)).href
-  const connection = new LspConnection(server.command, workspace, options.sandbox)
-  try {
-    await connection.request('initialize', {
-      processId: process.pid,
-      clientInfo: { name: 'Boo Code', version: '0.1.0' },
-      rootUri,
-      workspaceFolders: [{ uri: rootUri, name: resolve(workspace).split(sep).at(-1) || 'workspace' }],
-      capabilities: {
-        workspace: { workspaceFolders: true, configuration: true },
-        textDocument: { documentSymbol: {}, definition: {}, references: {}, hover: {}, diagnostic: {} },
-      },
-    }, timeoutMs, options.signal)
-    connection.notify('initialized', {})
-
+  const execute = async (session: PersistentLspSession, metric: LspSessionMetric): Promise<LspQueryResult> => session.runExclusive(async () => {
+    const connection = session.connection
     let published: Diagnostic[] | null = null
     const stopListening = connection.onNotification((message) => {
       if (message.method !== 'textDocument/publishDiagnostics') return
       const params = message.params as { uri?: string; diagnostics?: unknown } | undefined
       if (params?.uri === uri && Array.isArray(params.diagnostics)) published = params.diagnostics as Diagnostic[]
     })
-    connection.notify('textDocument/didOpen', { textDocument: { uri, languageId: server.languageId, version: 1, text: content } })
-
-    if (query.action === 'document_symbols') {
-      const result = await connection.request('textDocument/documentSymbol', { textDocument: { uri } }, timeoutMs, options.signal)
-      stopListening()
-      return { content: formatSymbols(result) }
-    }
-    if (query.action === 'hover') {
-      const result = await connection.request('textDocument/hover', { textDocument: { uri }, position: position(query.line, query.column) }, timeoutMs, options.signal)
-      stopListening()
-      const output = markup(result).trim()
-      return { content: output ? output.slice(0, 60_000) : '(tidak ada hover)' }
-    }
-    if (query.action === 'definition' || query.action === 'references') {
-      const params = { textDocument: { uri }, position: position(query.line, query.column) }
-      const result = query.action === 'definition'
-        ? await connection.request('textDocument/definition', params, timeoutMs, options.signal)
-        : await connection.request('textDocument/references', { ...params, context: { includeDeclaration: true } }, timeoutMs, options.signal)
-      stopListening()
-      return { content: formatLocations(workspace, result) }
-    }
-
-    let diagnostics: Diagnostic[] | null = null
     try {
-      diagnostics = pullDiagnostics(await connection.request('textDocument/diagnostic', { textDocument: { uri } }, Math.min(timeoutMs, 8_000), options.signal))
-    } catch {
-      // Banyak server masih memakai push diagnostics; tunggu notifikasinya.
+      session.syncDocument(uri, server.languageId, content)
+      metric.openDocuments = session.documents.size
+      if (query.action === 'document_symbols') {
+        const result = await connection.request('textDocument/documentSymbol', { textDocument: { uri } }, timeoutMs, options.signal)
+        return { content: formatSymbols(result), session: metric }
+      }
+      if (query.action === 'hover') {
+        const result = await connection.request('textDocument/hover', { textDocument: { uri }, position: position(query.line, query.column) }, timeoutMs, options.signal)
+        const output = markup(result).trim()
+        return { content: output ? output.slice(0, 60_000) : '(tidak ada hover)', session: metric }
+      }
+      if (query.action === 'definition' || query.action === 'references') {
+        const params = { textDocument: { uri }, position: position(query.line, query.column) }
+        const result = query.action === 'definition'
+          ? await connection.request('textDocument/definition', params, timeoutMs, options.signal)
+          : await connection.request('textDocument/references', { ...params, context: { includeDeclaration: true } }, timeoutMs, options.signal)
+        return { content: formatLocations(workspace, result), session: metric }
+      }
+
+      let diagnostics: Diagnostic[] | null = null
+      try {
+        diagnostics = pullDiagnostics(await connection.request('textDocument/diagnostic', { textDocument: { uri } }, Math.min(timeoutMs, 8_000), options.signal))
+      } catch {
+        // Banyak server masih memakai push diagnostics; tunggu notifikasinya.
+      }
+      if (!diagnostics && !published) await new Promise<void>((resolveWait) => setTimeout(resolveWait, Math.min(2_000, timeoutMs)))
+      const formatted = formatDiagnostics(query.path, diagnostics ?? published ?? [])
+      return { content: formatted.text, hasErrors: formatted.errors > 0, session: metric }
+    } finally {
+      stopListening()
     }
-    if (!diagnostics && !published) await new Promise<void>((resolveWait) => setTimeout(resolveWait, Math.min(2_000, timeoutMs)))
-    stopListening()
-    const formatted = formatDiagnostics(query.path, diagnostics ?? published ?? [])
-    return { content: formatted.text, hasErrors: formatted.errors > 0 }
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : 'request LSP gagal'
-    throw new Error(`${server.label}: ${detail} ${server.installHint}`, { cause: error })
-  } finally {
-    await connection.close()
+  })
+
+  if (options.persistent === false) {
+    const session = await PersistentLspSession.create(workspace, server, options.sandbox, timeoutMs, options.signal)
+    try { return await execute(session, { reused: false, restarted: false, openDocuments: 0 }) } finally { await session.close() }
   }
+
+  let restarted = false
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let acquired: { entry: PoolEntry; reused: boolean } | undefined
+    try {
+      acquired = await lspSessions.acquire(workspace, server, options.sandbox, timeoutMs, options.signal)
+      const result = await execute(acquired.entry.session, { reused: acquired.reused, restarted, openDocuments: 0 })
+      lspSessions.touch(acquired.entry)
+      return result
+    } catch (error) {
+      if (acquired) await lspSessions.invalidate(acquired.entry)
+      if (attempt === 0 && !options.signal?.aborted) { restarted = true; continue }
+      const detail = error instanceof Error ? error.message : 'request LSP gagal'
+      throw new Error(`${server.label}: ${detail} ${server.installHint}`, { cause: error })
+    }
+  }
+  throw new Error(`${server.label}: session LSP tidak dapat dipulihkan. ${server.installHint}`)
 }
 
 export const lspTool: Tool<LspQuery> = {
   name: 'lsp',
-  description: 'Query an installed Language Server for precise document symbols, go-to-definition, references, hover, or per-file diagnostics. Requires approval because it starts a local language-server process; it never installs one.',
+  description: 'Query an installed Language Server for precise document symbols, go-to-definition, references, hover, or per-file diagnostics. The sandboxed server session is reused briefly within this Boo process; it never installs one.',
   risk: 'confirm',
   runsCommand: true,
   schema: {
@@ -374,7 +562,7 @@ export const lspTool: Tool<LspQuery> = {
     if (isSensitivePath(args.path)) return { content: sensitiveRefusal(args.path), isError: true }
     try {
       const result = await runLspQuery(context.workspace, args, { sandbox: context.sandbox, signal: context.signal })
-      return { content: result.content, ...(result.hasErrors ? { isError: true } : {}) }
+      return { content: result.content, ...(result.hasErrors ? { isError: true } : {}), lspSession: result.session }
     } catch (error) {
       return { content: `Gagal: ${error instanceof Error ? error.message : 'LSP gagal'}`, isError: true }
     }

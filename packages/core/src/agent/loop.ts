@@ -7,7 +7,7 @@
 
 import type { ImageAttachment, Message, ToolCall, ToolSchema } from '../domain/message.ts'
 import type { DiffLine } from '../tools/diff.ts'
-import type { DelegatedResult, DelegatedTask, Tool, ToolRegistry, UserAsker } from '../domain/tool.ts'
+import type { DelegatedResult, DelegatedTask, Tool, ToolRecovery, ToolRegistry, UserAsker } from '../domain/tool.ts'
 import { ProviderError, type NineRouterProvider } from '../provider/nineRouter.ts'
 import {
   alignCut,
@@ -24,7 +24,9 @@ import { Checkpoints, restoreNote, undoNote, type RestorePlan, type UndoPlan } f
 import { composeSystemPrompt, instructionTargetsForTool, instructionsSignature, loadInstructions, SCOPED_INSTRUCTIONS_TOOL_RESULT, type InstructionFile } from './instructions.ts'
 import { BOO_SYSTEM_PROMPT } from './prompt.ts'
 import { assessLocally, AutoModelRouter, selectAutoModel, type AutoSelection, type ModelMode } from '../provider/auto.ts'
+import { classifyProviderCapabilityError, type ProviderRequirements } from '../provider/capabilities.ts'
 import { hasSubstantiveVerification, isVerificationCommand, riskVerificationPrompt, verificationPrompt, verificationStrength, type VerificationAttempt } from './verification.ts'
+import { MAX_VERIFICATION_REPAIR_ROUNDS, VerificationRepairLoop } from './verificationRepair.ts'
 import type { SandboxPolicy } from '../tools/sandbox.ts'
 import { fileFreshnessPrompt, FileSnapshots, MAX_FRESHNESS_NOTICE_FILES, type ObservedFileChange } from '../tools/fileSnapshots.ts'
 import { skillsSignature, type SkillDefinition } from '../tools/skills.ts'
@@ -38,7 +40,7 @@ import { validateImages } from './attachments.ts'
 import { expandPromptReferences } from './references.ts'
 import { MAX_STEERING_MESSAGES, MAX_STEERING_TOTAL_CHARACTERS, normalizeSteering, steeringMessage, STEERING_SKIPPED_TOOL_RESULT } from './steering.ts'
 import { assessChangeRisk, type ChangeRiskAssessment } from './risk.ts'
-import { analyzeVerificationImpact } from '../tools/testImpact.ts'
+import { analyzeVerificationImpact, type VerificationImpact } from '../tools/testImpact.ts'
 import { assessPromptInjection, assessPromptInjectionMessages, protectToolResultMessages, promptInjectionGuardPrompt, type PromptInjectionAssessment } from '../security/promptInjection.ts'
 import { TaskStateTracker, type TaskStateSnapshot } from './taskState.ts'
 import { ToolLoopGuard, TOOL_LOOP_BLOCKED_RESULT, TOOL_LOOP_STOPPED_REPLY, TOOL_LOOP_STOPPED_RESULT, toolLoopDeniedWarning, toolLoopSystemPrompt, toolLoopWarning } from './stall.ts'
@@ -46,6 +48,7 @@ import { toolArgumentFailure, toolArgumentSystemPrompt, validateToolArguments } 
 import { MAX_TOOL_PROTOCOL_AUTO_FALLBACKS, normalizeToolCallIds, ToolProtocolCircuitBreaker, TOOL_PROTOCOL_STOPPED_REPLY, toolProtocolName, toolProtocolSystemPrompt, unknownToolFailure, type ToolProtocolDecision, type ToolProtocolFailureKind } from './toolProtocol.ts'
 import { EvidenceCache, type EvidenceCacheHit } from './evidenceCache.ts'
 import { ToolResultStore } from './toolResults.ts'
+import { FailurePostmortemTracker, type FailurePostmortemReport } from './postmortem.ts'
 
 export type AgentEvent =
   | { type: 'model-routing' }
@@ -67,6 +70,9 @@ export type AgentEvent =
   | { type: 'tool-result-truncated'; name: string; callId: string; ref?: string; originalCharacters: number; visibleCharacters: number }
   /** Sekelompok tool discovery opt-in dijalankan bersamaan dengan urutan hasil stabil. */
   | { type: 'tool-parallel'; stage: 'started' | 'completed'; name: 'discovery'; tools: string[]; calls: number; durationMs?: number }
+  /** Tool timeout dihentikan aman; metadata ini tidak memuat command maupun output. */
+  | ({ type: 'tool-recovery'; name: string; callId: string } & ToolRecovery)
+  | { type: 'lsp-session'; stage: 'started' | 'reused' | 'restarted'; openDocuments: number }
   | { type: 'tool-end'; name: string; callId: string; content: string; isError: boolean; cancelled: boolean }
   | { type: 'tool-denied'; name: string; callId: string; feedback?: string }
   /** Argumen ditolak secara lokal sebelum preview, approval, dan eksekusi. */
@@ -78,7 +84,7 @@ export type AgentEvent =
   | { type: 'hook-start'; event: HookEvent; id: string; command: string }
   | { type: 'hook-end'; event: HookEvent; id: string; content: string; success: boolean; denied: boolean }
   | { type: 'turn-end'; message: Message }
-  | { type: 'context-trimmed'; droppedMessages: number; estimatedTokens: number; prioritizedMessages: number }
+  | { type: 'context-trimmed'; droppedMessages: number; estimatedTokens: number; prioritizedMessages: number; dependencyMessages?: number; dependencyEdges?: number }
   /** File yang pernah dibaca berubah di luar file tools; model diminta membaca ulang. */
   | { type: 'workspace-changed'; files: ObservedFileChange[]; remaining: number }
   /** Percakapan lama sedang diringkas oleh model. */
@@ -96,10 +102,14 @@ export type AgentEvent =
   | { type: 'turn-limit'; turns: number }
   /** Agent akan memeriksa perubahan sebelum diizinkan menyimpulkan pekerjaan. */
   | { type: 'verification-needed'; files: string[]; tests?: string[]; commands?: string[] }
+  /** Ringkasan graph dampak tanpa source atau path, aman untuk trace lokal. */
+  | { type: 'change-impact'; changedFiles: number; affectedFiles: number; tests: number; edges: number; maxDepth: number; blastRadius: 'small' | 'medium' | 'large'; truncated: boolean }
   /** Status durable yang dicatat segera setelah mutasi atau verifikasi. */
   | { type: 'verification-state'; status: 'needed' | 'complete'; revision: number }
   /** Model tetap menyimpulkan tanpa bukti verifikasi setelah sudah diingatkan. */
   | { type: 'verification-incomplete'; files: string[]; attempted: boolean }
+  /** Loop bounded untuk mendiagnosis, memperbaiki, dan menjalankan ulang verifikasi gagal. */
+  | { type: 'verification-repair'; stage: 'needed' | 'retrying' | 'repaired' | 'exhausted'; round: number; maxRounds: number; revision: number }
   /** Reviewer independen berjalan tanpa tool sebelum task kompleks ditutup. */
   | { type: 'critic-start'; round: number }
   | { type: 'critic-end'; round: number; model: string; status: 'pass' | 'findings' | 'error' | 'limit'; findings: number; message?: string }
@@ -111,6 +121,8 @@ export type AgentEvent =
   | { type: 'prompt-injection-detected'; tool: string; source: PromptInjectionAssessment['source']; categories: PromptInjectionAssessment['categories'] }
   /** Pemeriksaan kuat tidak tersedia sesudah satu pengingat; pekerjaan tetap direview. */
   | { type: 'risk-verification-weak'; assessment: ChangeRiskAssessment }
+  /** Diagnosis lokal setelah task gagal/berhenti; tidak memuat prompt, source, args, output, atau path. */
+  | { type: 'failure-postmortem'; report: FailurePostmortemReport }
   | { type: 'error'; message: string }
 
 /** Ditanyakan sebelum tool berisiko dijalankan. */
@@ -210,6 +222,12 @@ export const TURN_LIMIT_REPLY_PREFIX = '(Berhenti setelah '
 
 export function turnLimitReply(turns: number): string {
   return `${TURN_LIMIT_REPLY_PREFIX}${turns} langkah atas permintaan pengguna; pekerjaan belum tentu selesai.)`
+}
+
+function isFailureTerminal(event: AgentEvent): boolean {
+  return event.type === 'error' || event.type === 'turn-limit' || event.type === 'verification-incomplete'
+    || event.type === 'tool-loop' && event.stage === 'stopped'
+    || event.type === 'tool-protocol' && event.stage === 'stopped'
 }
 
 /** Menunggu, tetapi selesai lebih awal bila pengguna menghentikan pekerjaan. */
@@ -547,6 +565,7 @@ export class Agent {
     provider: NineRouterProvider,
     task: string,
     verificationAttempts: readonly VerificationAttempt[],
+    impact?: VerificationImpact,
     signal?: AbortSignal,
   ): Promise<{ model: string; result: CriticResult | null; error?: string }> {
     let reviewerModel = provider.model
@@ -569,7 +588,7 @@ export class Agent {
       const reviewer = provider.fork(reviewerModel, reviewerEffort)
       const stream = reviewer.stream([
         { role: 'system', content: AUTO_REVIEW_SYSTEM_PROMPT },
-        { role: 'user', content: automaticReviewRequest(task, changes, verificationAttempts) },
+        { role: 'user', content: automaticReviewRequest(task, changes, verificationAttempts, impact) },
       ], [], signal)
       let raw = ''
       for (;;) {
@@ -755,16 +774,44 @@ export class Agent {
     if (this.acceptingSteering) throw new Error('Agent sudah menjalankan request lain.')
     this.acceptingSteering = true
     this.taskStateTracker.begin(userInput, this.options.provider.model, this.options.provider.reasoningEffort)
+    const postmortem = new FailurePostmortemTracker({
+      workspace: this.options.workspace,
+      home: this.options.home,
+      model: this.options.provider.model,
+      reasoningEffort: this.options.provider.reasoningEffort,
+    })
     let clean = false
     let failed = false
     try {
       for await (const event of this.runRequest(userInput, { signal, mode, images })) {
+        postmortem.record(event)
+        if (isFailureTerminal(event)) {
+          const report = postmortem.finish()
+          if (report) {
+            const postmortemEvent: AgentEvent = { type: 'failure-postmortem', report }
+            this.taskStateTracker.record(postmortemEvent)
+            yield postmortemEvent
+          }
+        }
         this.taskStateTracker.record(event)
         yield event
       }
       clean = true
+      const report = postmortem.finish()
+      if (report) {
+        const event: AgentEvent = { type: 'failure-postmortem', report }
+        this.taskStateTracker.record(event)
+        yield event
+      }
     } catch (error) {
       failed = true
+      postmortem.recordThrown(error)
+      const report = postmortem.finish()
+      if (report) {
+        const event: AgentEvent = { type: 'failure-postmortem', report }
+        this.taskStateTracker.record(event)
+        yield event
+      }
       throw error
     } finally {
       this.taskStateTracker.finish(clean, Date.now(), failed ? 'error' : 'stopped')
@@ -788,6 +835,7 @@ export class Agent {
     const readOnly = mode === 'review' || mode === 'plan'
     const registry = readOnly ? createReviewRegistry(configuredRegistry) : configuredRegistry
     registry.beginTask?.()
+    this.autoRouter.beginTask()
     const toolSandbox = readOnly ? { ...this.options.sandbox, mode: 'read-only' as const } : this.options.sandbox
     const lifecycleHooks = this.options.hooks?.() ?? []
     let autoFallbacks = 0
@@ -800,6 +848,8 @@ export class Agent {
     let riskReminderRevision = -1
     let criticRounds = 0
     const verificationAttempts: VerificationAttempt[] = []
+    let latestImpact: VerificationImpact | undefined
+    const verificationRepair = new VerificationRepairLoop()
     const toolLoopGuard = new ToolLoopGuard()
     const toolProtocolGuard = new ToolProtocolCircuitBreaker()
     const evidenceCache = new EvidenceCache()
@@ -825,11 +875,19 @@ export class Agent {
       referenced.references.length ? `[${referenced.references.length} explicitly referenced workspace path(s): ${referenced.references.map((item) => item.path).join(', ')}]` : '',
     ].filter(Boolean).join('\n')
     const autoRoutingInput = routingSignals ? `${userInput}\n\n${routingSignals}` : userInput
+    const autoRequirements: ProviderRequirements = {
+      vision: images.length > 0,
+      tools: registry.schemas().length > 0,
+      contextTokens: inspectContext(
+        this.contextMessages(), registry.schemas(), this.options.maxContextTokens ?? DEFAULT_MAX_CONTEXT_TOKENS,
+      ).sentTokens,
+      reasoning: true,
+    }
 
     if (this.mode === 'auto' && !signal?.aborted) {
       yield { type: 'model-routing' }
       try {
-        const selected = await this.autoRouter.route(provider, autoRoutingInput, this.messages.slice(1, -1), signal)
+        const selected = await this.autoRouter.route(provider, autoRoutingInput, this.messages.slice(1, -1), signal, autoRequirements)
         provider.model = selected.model
         provider.reasoningEffort = selected.reasoningEffort
         this.autoSelection = selected
@@ -893,6 +951,17 @@ export class Agent {
           let impact
           try {
             impact = await analyzeVerificationImpact(this.options.workspace, files, this.options.home, signal)
+            latestImpact = impact
+            yield {
+              type: 'change-impact',
+              changedFiles: impact.changedFiles.length,
+              affectedFiles: impact.affectedFiles.length,
+              tests: impact.directTests.length + impact.dependentTests.length,
+              edges: impact.edges.length,
+              maxDepth: impact.affectedFiles.reduce((maximum, file) => Math.max(maximum, file.depth), 0),
+              blastRadius: impact.blastRadius,
+              truncated: impact.truncated,
+            }
           } catch {
             // Indeks dampak membantu memilih test, tetapi tidak boleh menghalangi
             // pengingat verifikasi dasar saat filesystem berubah di tengah scan.
@@ -907,6 +976,7 @@ export class Agent {
           }
         }
       }
+      const verificationRepairReminder = verificationRepair.takePrompt(mutationRevision)
       let result
       const pendingToolLoopReminder = toolLoopReminder
       const pendingToolArgumentReminder = toolArgumentReminder
@@ -916,7 +986,7 @@ export class Agent {
       try {
         const modePrompt = mode === 'review' ? REVIEW_SYSTEM_PROMPT : mode === 'plan' ? PLAN_SYSTEM_PROMPT : ''
         const injectionReminder = promptInjectionGuardPrompt(promptInjectionAssessments)
-        const extraSystemPrompt = [recoveryPrompt, modePrompt, freshnessReminder, completionReminder ?? '', injectionReminder, pendingToolLoopReminder, pendingToolArgumentReminder, pendingToolProtocolReminder].filter(Boolean).join('\n\n') || undefined
+        const extraSystemPrompt = [recoveryPrompt, modePrompt, freshnessReminder, completionReminder ?? '', verificationRepairReminder, injectionReminder, pendingToolLoopReminder, pendingToolArgumentReminder, pendingToolProtocolReminder].filter(Boolean).join('\n\n') || undefined
         // Begitu benar-benar akan memanggil model, recovery sudah dipakai. Bila
         // request berhenti sebelum titik ini, catatannya tetap ada untuk berikutnya.
         if (recoveryPrompt) this.pendingRecoveryPrompt = ''
@@ -934,11 +1004,24 @@ export class Agent {
         // hilang. Hanya Auto yang boleh berpindah sendiri, dan hanya bila 404
         // terjadi sebelum satu karakter jawaban diterima — tidak ada respons atau
         // tool yang mungkin terduplikasi.
-        const imageUnsupported = images.length > 0 && error instanceof ProviderError && error.status === 400 && /(?:image|vision|multimodal|image_url)/i.test(error.message)
-        if (this.mode === 'auto' && error instanceof ProviderError && (error.status === 404 || imageUnsupported) && !partial.text && autoFallbacks < 5) {
+        const capabilityFailure = error instanceof ProviderError
+          ? classifyProviderCapabilityError(error, images.length > 0)
+          : null
+        if (this.mode === 'auto' && error instanceof ProviderError && capabilityFailure && !partial.text && autoFallbacks < 5) {
           // Model cadangan belum pernah menerima pengingat verifikasi ini.
           if (completionReminder) lastRemindedRevision = -1
-          this.autoRouter.markUnavailable(provider.model)
+          if (capabilityFailure === 'unavailable') this.autoRouter.observe({ kind: 'unavailable', model: provider.model })
+          else if (capabilityFailure === 'context-limit') {
+            this.autoRouter.observe({ kind: 'context-limit', model: provider.model, contextTokens: autoRequirements.contextTokens })
+          } else {
+            this.autoRouter.observe({
+              kind: 'unsupported', model: provider.model,
+              capability: capabilityFailure === 'vision-unsupported' ? 'vision'
+                : capabilityFailure === 'tools-unsupported' ? 'tools' : 'reasoning',
+            })
+          }
+          if (capabilityFailure === 'unavailable') this.autoRouter.markUnavailable(provider.model)
+          else this.autoRouter.markTaskUnavailable(provider.model)
           autoFallbacks += 1
           yield { type: 'model-routing' }
           try {
@@ -995,7 +1078,7 @@ export class Agent {
           return
         }
         const stateBeforeCompletionHook = `${mutationRevision}:${verifiedRevision}`
-        if (completion.mutated) mutationRevision += 1
+        if (completion.mutated) { mutationRevision += 1; latestImpact = undefined }
         if (completion.mutated) evidenceCache.invalidate()
         if (completion.verified) verifiedRevision = mutationRevision
         if (`${mutationRevision}:${verifiedRevision}` !== stateBeforeCompletionHook) {
@@ -1017,6 +1100,16 @@ export class Agent {
           const current = await this.checkpoints.currentPlan()
           const files = current?.entries.map((entry) => entry.label) ?? []
           if (files.length) {
+            const repair = verificationRepair.onIncompleteConclusion(mutationRevision)
+            if (repair.action === 'retry') {
+              yield { type: 'verification-repair', stage: 'retrying', round: repair.round, maxRounds: repair.maxRounds, revision: mutationRevision }
+              const feedback = verificationRepair.takePrompt(mutationRevision)
+              if (feedback) this.append({ role: 'user', content: feedback })
+              continue
+            }
+            if (repair.action === 'exhausted') {
+              yield { type: 'verification-repair', stage: 'exhausted', round: repair.round, maxRounds: repair.maxRounds, revision: mutationRevision }
+            }
             yield { type: 'verification-incomplete', files, attempted: verificationAttempts.length > 0 }
             return
           }
@@ -1047,7 +1140,7 @@ export class Agent {
           criticRounds += 1
           reviewedRevision = mutationRevision
           yield { type: 'critic-start', round: criticRounds }
-          const review = await this.runAutomaticCritic(provider, effectiveTask, verificationAttempts, signal)
+          const review = await this.runAutomaticCritic(provider, effectiveTask, verificationAttempts, latestImpact, signal)
           if (signal?.aborted) {
             this.settleCancellation('')
             yield { type: 'cancelled' }
@@ -1341,7 +1434,7 @@ export class Agent {
           continue
         }
         const stateBeforeBeforeHook = `${mutationRevision}:${verifiedRevision}`
-        if (beforeHooks.mutated) mutationRevision += 1
+        if (beforeHooks.mutated) { mutationRevision += 1; latestImpact = undefined }
         if (beforeHooks.mutated) evidenceCache.invalidate()
         if (beforeHooks.verified) verifiedRevision = mutationRevision
         if (`${mutationRevision}:${verifiedRevision}` !== stateBeforeBeforeHook) {
@@ -1363,6 +1456,8 @@ export class Agent {
         yield { type: 'tool-start', name: tool.name, preview, callId: call.id, args }
         let content: string
         let isError: boolean
+        let recovery: ToolRecovery | undefined
+        let lspSession: { reused: boolean; restarted: boolean; openDocuments: number } | undefined
         // Keluaran dari callback ditampung lalu diteruskan sebagai event selagi tool
         // berjalan; generator tidak bisa yield dari dalam callback.
         const chunks: string[] = []
@@ -1414,28 +1509,41 @@ export class Agent {
           const outcome = await running
           content = outcome.content
           isError = Boolean(outcome.isError)
+          recovery = outcome.recovery
+          lspSession = outcome.lspSession
         } catch (error) {
           content = `Gagal: ${error instanceof Error ? error.message : 'error tak dikenal'}`
           isError = true
         }
+        if (recovery) yield { type: 'tool-recovery', name: tool.name, callId: call.id, ...recovery }
+        if (lspSession) yield { type: 'lsp-session', stage: lspSession.restarted ? 'restarted' : lspSession.reused ? 'reused' : 'started', openDocuments: lspSession.openDocuments }
         const injection = assessPromptInjection(tool.name, content)
         if (injection?.suspicious) {
           promptInjectionAssessments.push(injection)
           yield { type: 'prompt-injection-detected', tool: tool.name, source: injection.source, categories: injection.categories }
         }
         const stateBeforeTool = `${mutationRevision}:${verifiedRevision}`
-        if (!isError && tool.mutatesWorkspace) mutationRevision += 1
+        if (!isError && tool.mutatesWorkspace) { mutationRevision += 1; latestImpact = undefined }
         if ((tool.name === 'bash' && isVerificationCommand(args.command)) || tool.verifiesWorkspace) {
           const command = tool.verifiesWorkspace ? tool.name : String(args.command)
           verificationAttempts.push({ command, success: !isError, revision: mutationRevision, strength: tool.verifiesWorkspace ? 'substantive' : verificationStrength(command) })
-          if (!isError) verifiedRevision = mutationRevision
+          if (isError && mutationRevision > 0 && mutationRevision !== verifiedRevision) {
+            const repair = verificationRepair.recordFailure(command, mutationRevision)
+            yield { type: 'verification-repair', stage: 'needed', round: repair.round, maxRounds: MAX_VERIFICATION_REPAIR_ROUNDS, revision: mutationRevision }
+          } else {
+            if (!isError) {
+              verifiedRevision = mutationRevision
+              const repairedRounds = verificationRepair.recordSuccess()
+              if (repairedRounds) yield { type: 'verification-repair', stage: 'repaired', round: repairedRounds, maxRounds: MAX_VERIFICATION_REPAIR_ROUNDS, revision: mutationRevision }
+            }
+          }
         }
         if (`${mutationRevision}:${verifiedRevision}` !== stateBeforeTool) {
           yield { type: 'verification-state', status: mutationRevision === verifiedRevision ? 'complete' : 'needed', revision: mutationRevision }
         }
         const afterHooks = yield* this.runHooks(lifecycleHooks, 'after_tool', tool.name, toolSandbox, signal, promptInjectionAssessments.some((assessment) => assessment.suspicious))
         const stateBeforeAfterHook = `${mutationRevision}:${verifiedRevision}`
-        if (afterHooks.mutated) mutationRevision += 1
+        if (afterHooks.mutated) { mutationRevision += 1; latestImpact = undefined }
         if (afterHooks.mutated) evidenceCache.invalidate()
         if (afterHooks.verified) verifiedRevision = mutationRevision
         if (`${mutationRevision}:${verifiedRevision}` !== stateBeforeAfterHook) {
@@ -1507,6 +1615,7 @@ export class Agent {
         consecutiveTurns: decision.consecutiveTurns, failures: decision.failures, kinds: decision.kinds,
       }
       this.autoRouter.markUnavailable(failedModel)
+      this.autoRouter.observe({ kind: 'tool-protocol-failure', model: failedModel })
       yield { type: 'model-routing' }
       try {
         const selected = await this.autoRouter.route(provider, routingInput, this.messages.slice(1), signal)
@@ -1602,6 +1711,8 @@ export class Agent {
           droppedMessages: trimmed.droppedMessages,
           estimatedTokens: trimmed.estimatedTokens + schemaTokens,
           prioritizedMessages: trimmed.prioritizedMessages,
+          dependencyMessages: trimmed.dependencyMessages,
+          dependencyEdges: trimmed.dependencyEdges,
         } as AgentEvent
       }
       const delays = this.options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS
@@ -1630,7 +1741,19 @@ export class Agent {
       }
 
       const empty = !result.message.content?.trim() && !result.message.tool_calls?.length
-      if (!empty || attempt >= EMPTY_REPLY_RETRIES || signal?.aborted) return result
+      if (!empty || attempt >= EMPTY_REPLY_RETRIES || signal?.aborted) {
+        if (!empty && this.mode === 'auto') {
+          this.autoRouter.observe({
+            kind: 'response',
+            model: provider.model,
+            tools: schemas.length > 0,
+            vision: trimmed.messages.some((message) => Boolean(message.images?.length)),
+            reasoning: Boolean(provider.reasoningEffort),
+            contextTokens: trimmed.estimatedTokens + schemaTokens,
+          })
+        }
+        return result
+      }
     }
   }
 

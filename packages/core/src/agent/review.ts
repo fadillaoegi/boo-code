@@ -5,9 +5,10 @@ import { condense, diffLines } from '../tools/diff.ts'
 import { createDiscoverableRegistry, DEFAULT_CORE_TOOL_NAMES } from '../tools/toolSearch.ts'
 import type { CheckpointFileChange } from './checkpoints.ts'
 import type { VerificationAttempt } from './verification.ts'
+import type { ChangeImpactGraph } from '../tools/changeImpact.ts'
 
 const REVIEW_TOOLS = new Set([
-  'read_file', 'read_tool_output', 'list_dir', 'glob', 'grep', 'code_search', 'code_graph', 'test_impact', 'repo_map',
+  'read_file', 'read_tool_output', 'list_dir', 'glob', 'grep', 'code_search', 'code_graph', 'change_impact', 'test_impact', 'repo_map',
   'git_status', 'git_changed_files', 'git_diff', 'git_log', 'git_show', 'git_blame',
   'lsp', 'diagnostics', 'delegate', 'ask_user',
   'memory_list',
@@ -115,7 +116,7 @@ function renderChange(change: CheckpointFileChange): string {
 }
 
 /** Context is bounded and labels every diff as untrusted project data. */
-export function automaticReviewRequest(task: string, changes: readonly CheckpointFileChange[], attempts: readonly VerificationAttempt[]): string {
+export function automaticReviewRequest(task: string, changes: readonly CheckpointFileChange[], attempts: readonly VerificationAttempt[], impact?: ChangeImpactGraph): string {
   const sections: string[] = []
   let size = 0
   for (const change of changes.slice(0, MAX_CRITIC_FILES)) {
@@ -133,6 +134,25 @@ export function automaticReviewRequest(task: string, changes: readonly Checkpoin
     changedFiles: changes.map((item) => item.label).slice(0, MAX_CRITIC_FILES),
     diff: sections.join('\n\n'),
     omittedFiles: Math.max(0, changes.length - sections.length),
+    ...(impact ? {
+      impact: {
+        blastRadius: impact.blastRadius,
+        affectedFiles: impact.affectedFiles.slice(0, 40).map((file) => ({
+          path: clean(file.path, 300),
+          depth: file.depth,
+          relations: file.relations,
+          confidence: file.confidence,
+          test: file.test,
+        })),
+        affectedSymbols: impact.affectedSymbols.slice(0, 30).map((symbol) => ({
+          path: clean(symbol.path, 300),
+          name: clean(symbol.name, 200),
+          kind: clean(symbol.kind, 50),
+          line: symbol.line,
+        })),
+        truncated: impact.truncated || impact.affectedFiles.length > 40 || impact.affectedSymbols.length > 30,
+      },
+    } : {}),
   })
 }
 

@@ -12,6 +12,7 @@ import { repoMapTool } from './repoMap.ts'
 import { listSkillsTool, readSkillResourceTool, readSkillTool } from './skills.ts'
 import { codeGraphTool, codeSearchTool } from './codeSearch.ts'
 import { testImpactTool } from './testImpact.ts'
+import { changeImpactTool } from './changeImpact.ts'
 import { memoryListTool } from './memory.ts'
 import { writeFileTool } from './writeFile.ts'
 import { editFileTool } from './editFile.ts'
@@ -58,6 +59,7 @@ export function createSubagentRegistry() {
     grepTool,
     codeSearchTool,
     codeGraphTool,
+    changeImpactTool,
     testImpactTool,
     repoMapTool,
     memoryListTool,

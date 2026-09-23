@@ -24,6 +24,8 @@ import {
   FEATURED_FAMILIES,
   findSelection,
   formatTaskStatus,
+  formatProviderCapabilityProfile,
+  formatFailurePostmortem,
   groupModels,
   imageDataUrl,
   INIT_PROMPT,
@@ -38,6 +40,8 @@ import {
   loadPromptCommands,
   loadHooks,
   loadPermissionPolicy,
+  loadProviderCapabilityProfile,
+  loadLatestFailurePostmortem,
   storeImageData,
   validateImages,
   latestInterruptedRun,
@@ -795,8 +799,9 @@ export class WebController {
       case '/stats': {
         const stats = aggregateLocalTraces(this.options.home ?? homedir(), this.workspace, 100)
         const models = Object.entries(stats.models).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name} ${count}×`).join(', ')
+        const failures = Object.entries(stats.failureCategories).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, count]) => `${name} ${count}×`).join(', ')
         this.notice('info', stats.runs
-          ? `Metrik lokal ${stats.runs} run: ${stats.completed} selesai, ${stats.cancelled} dibatalkan, ${stats.errors} error. Rata-rata ${(stats.averageDurationMs / 1_000).toFixed(1)}s, ${stats.averageTurns} turn, ${stats.averageToolCalls} tool call. Kegagalan tool ${stats.toolFailureRate}%. Review otomatis ${stats.criticReviews}, temuan ${stats.criticFindings}, gagal ${stats.criticFailures}. Risiko tinggi ${stats.highRiskRuns}. Arahan live ${stats.steeringMessages}. Evidence cache ${stats.evidenceCacheHits} hit, ${stats.evidenceCacheSavedCharacters.toLocaleString('id-ID')} karakter dihemat. Context relevance mempertahankan ${stats.contextPrioritizedMessages} pesan lama. Parallel discovery ${stats.parallelDiscoveryCalls} call dalam ${stats.parallelDiscoveryBatches} batch. Tool result store menahan ${stats.deferredToolResultCharacters.toLocaleString('id-ID')} karakter dari ${stats.truncatedToolResults} hasil besar.${models ? ` Model: ${models}.` : ''}\n\nPrompt, kode, argumen, dan output tidak direkam.`
+          ? `Metrik lokal ${stats.runs} run: ${stats.completed} selesai, ${stats.cancelled} dibatalkan, ${stats.errors} error. Rata-rata ${(stats.averageDurationMs / 1_000).toFixed(1)}s, ${stats.averageTurns} turn, ${stats.averageToolCalls} tool call. Kegagalan tool ${stats.toolFailureRate}%. Verification repair ${stats.verificationRepairRounds} putaran, ${stats.verificationRepairs} pulih, ${stats.verificationRepairExhausted} kehabisan batas. Change impact ${stats.changeImpactAnalyses} analisis, ${stats.changeImpactAffectedFiles} file, ${stats.changeImpactEdges} relasi, ${stats.changeImpactLarge} blast radius besar. LSP session ${stats.lspSessionStarts} baru, ${stats.lspSessionReuses} reuse, ${stats.lspSessionRestarts} restart. Review otomatis ${stats.criticReviews}, temuan ${stats.criticFindings}, gagal ${stats.criticFailures}. Risiko tinggi ${stats.highRiskRuns}. Arahan live ${stats.steeringMessages}. Evidence cache ${stats.evidenceCacheHits} hit, ${stats.evidenceCacheSavedCharacters.toLocaleString('id-ID')} karakter dihemat. Context relevance mempertahankan ${stats.contextPrioritizedMessages} pesan lama; dependency graph ${stats.contextDependencyMessages} pesan melalui ${stats.contextDependencyEdges} relasi. Parallel discovery ${stats.parallelDiscoveryCalls} call dalam ${stats.parallelDiscoveryBatches} batch. Tool result store menahan ${stats.deferredToolResultCharacters.toLocaleString('id-ID')} karakter dari ${stats.truncatedToolResults} hasil besar. Timeout recovery ${stats.toolTimeoutRecoveries}.${failures ? ` Postmortem: ${failures}.` : ''}${models ? ` Model: ${models}.` : ''}\n\nPrompt, kode, argumen, dan output tidak direkam.`
           : 'Belum ada trace lokal untuk workspace ini.')
         return null
       }
@@ -811,7 +816,10 @@ export class WebController {
           `Riwayat ${report.historyMessages} pesan · konteks aktif ${report.messages} · dikirim ${report.sentMessages}.`,
           ...(report.compactionActive ? [`${report.summarizedMessages} pesan lama sudah diganti ringkasan otomatis.`] : []),
           ...(report.droppedMessages
-            ? [`${report.droppedMessages} pesan tidak muat; ${report.prioritizedMessages} pesan lama relevan akan dipertahankan.`]
+            ? [
+              `${report.droppedMessages} pesan tidak muat; ${report.prioritizedMessages} pesan lama relevan akan dipertahankan.`,
+              ...(report.dependencyMessages ? [`${report.dependencyMessages} pesan dependency dipertahankan melalui ${report.dependencyEdges} relasi context.`] : []),
+            ]
             : report.pressure !== 'healthy'
               ? ['Gunakan /compact bila ingin memberi ruang sebelum task besar berikutnya.']
               : ['Belum perlu compact; Boo akan meringkas otomatis saat mendekati batas.']),
@@ -821,6 +829,12 @@ export class WebController {
       }
       case '/status':
         this.notice('info', formatTaskStatus(await this.agent.taskStatus()))
+        return null
+      case '/capabilities':
+        this.notice('info', formatProviderCapabilityProfile(loadProviderCapabilityProfile(this.options.home ?? homedir())))
+        return null
+      case '/postmortem':
+        this.notice('info', formatFailurePostmortem(loadLatestFailurePostmortem(this.options.home ?? homedir(), this.workspace)))
         return null
       case '/init':
         return { display: '/init', prompt: INIT_PROMPT, kind: 'send' }
@@ -846,7 +860,7 @@ export class WebController {
         return null
       }
       case '/help':
-        this.notice('info', 'Perintah: /plan <tugas>, /implement, /review [base], /spec <ide>, /spec, /undo, /restore [id], /fork, /rewind [nomor], /compact, /context, /status, /stats, /init, /commands, /hooks, /permissions, /apps, /open <alias>, /run <perintah>. Pakai @path atau @file:10-30 untuk menyertakan konteks workspace. Model, sesi, dan antrean ada di tombol halaman. Esc menghentikan pekerjaan.')
+        this.notice('info', 'Perintah: /plan <tugas>, /implement, /review [base], /spec <ide>, /spec, /undo, /restore [id], /fork, /rewind [nomor], /compact, /context, /status, /stats, /capabilities, /postmortem, /init, /commands, /hooks, /permissions, /apps, /open <alias>, /run <perintah>. Pakai @path atau @file:10-30 untuk menyertakan konteks workspace. Model, sesi, dan antrean ada di tombol halaman. Esc menghentikan pekerjaan.')
         return null
       case '/commands': {
         const commands = loadPromptCommands({ workspace: this.workspace, home: this.options.home ?? homedir() })

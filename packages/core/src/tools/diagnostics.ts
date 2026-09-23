@@ -1,6 +1,7 @@
 import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Tool } from '../domain/tool.ts'
+import type { Tool, ToolRecovery } from '../domain/tool.ts'
+import { adaptiveTimeoutProfile, rememberAdaptiveTimeout, selectAdaptiveTimeout } from './adaptiveTimeout.ts'
 import { runCommand } from './shell.ts'
 
 export type DiagnosticKind = 'types' | 'lint'
@@ -106,7 +107,7 @@ export const diagnosticsTool: Tool<DiagnosticsArgs> = {
         type: 'object',
         properties: {
           kind: { type: 'string', enum: ['all', 'types', 'lint'], description: 'Diagnostics to run; defaults to all' },
-          timeout: { type: 'number', description: 'Timeout per command in seconds, 1–600; defaults to 180' },
+          timeout: { type: 'number', description: 'Exact hard timeout per command in seconds, 1–600; omit for adaptive timeout' },
         },
       },
     },
@@ -119,24 +120,45 @@ export const diagnosticsTool: Tool<DiagnosticsArgs> = {
   async run(args, context) {
     const commands = await detectProjectDiagnostics(context.workspace, args.kind)
     if (!commands.length) return { content: 'Gagal: tidak menemukan konfigurasi diagnostics yang didukung di root workspace.', isError: true }
-    const timeout = Math.max(1, Math.min(600, Number.isFinite(args.timeout) ? Math.round(args.timeout!) : 180)) * 1_000
     const sections: string[] = []
     let failed = false
+    let recovery: ToolRecovery | undefined
     for (const entry of commands) {
       context.onOutput?.(`\n[${entry.label}] ${entry.command}\n`)
+      const timeout = selectAdaptiveTimeout(entry.command, args.timeout, adaptiveTimeoutProfile(context.home))
       const result = await runCommand(entry.command, {
         cwd: context.workspace,
-        timeoutMs: timeout,
+        timeoutMs: timeout.idleSeconds * 1_000,
+        ...(timeout.mode === 'adaptive' ? { maxRuntimeMs: timeout.maximumSeconds * 1_000 } : {}),
         sandbox: context.sandbox,
         ...(context.signal ? { signal: context.signal } : {}),
         ...(context.onOutput ? { onOutput: context.onOutput } : {}),
       })
+      const updatedProfile = !result.cancelled && !result.spawnError
+        ? rememberAdaptiveTimeout(context.home, timeout.category, result.durationMs, result.timedOut)
+        : undefined
       const warning = result.sandbox.enforced || context.sandbox?.mode === 'danger-full-access' ? '' : `\nPeringatan sandbox: ${result.sandbox.reason}`
       const state = result.cancelled ? 'dibatalkan' : result.timedOut ? 'waktu habis' : result.spawnError ? `gagal dimulai: ${result.spawnError}` : `exit ${result.exitCode ?? '?'}`
-      sections.push(`## ${entry.label}\n$ ${entry.command}\n${result.output || '(tanpa keluaran)'}\n[${state}]${warning}`)
+      const timeoutNote = result.timedOut
+        ? `\n[recovery: ${result.timeoutReason === 'idle' ? 'tanpa progres' : 'hard cap'}; periksa state sebelum mengulang]`
+        : ''
+      sections.push(`## ${entry.label}\n$ ${entry.command}\n${result.output || '(tanpa keluaran)'}\n[${state}]${timeoutNote}${warning}`)
+      if (result.timedOut) {
+        const next = selectAdaptiveTimeout(entry.command, undefined, updatedProfile ?? adaptiveTimeoutProfile(context.home))
+        recovery = {
+          kind: 'timeout',
+          reason: result.timeoutReason ?? 'maximum',
+          category: timeout.category,
+          durationMs: result.durationMs,
+          idleTimeoutMs: timeout.idleSeconds * 1_000,
+          maximumTimeoutMs: timeout.maximumSeconds * 1_000,
+          nextIdleTimeoutMs: next.idleSeconds * 1_000,
+          partialOutput: Boolean(result.output),
+        }
+      }
       if (result.cancelled || result.timedOut || result.spawnError || result.exitCode !== 0) failed = true
       if (result.cancelled) break
     }
-    return { content: sections.join('\n\n'), ...(failed ? { isError: true } : {}) }
+    return { content: sections.join('\n\n'), ...(failed ? { isError: true } : {}), ...(recovery ? { recovery } : {}) }
   },
 }

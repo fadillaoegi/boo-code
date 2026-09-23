@@ -1,10 +1,16 @@
 import type { Tool } from '../domain/tool.ts'
+import {
+  adaptiveTimeoutProfile,
+  MAX_TOOL_TIMEOUT_SECONDS,
+  rememberAdaptiveTimeout,
+  selectAdaptiveTimeout,
+} from './adaptiveTimeout.ts'
 import { backgroundProcesses } from './background.ts'
 import { resolveShell, runCommand } from './shell.ts'
 import { inspectSandbox } from './sandbox.ts'
 
 export const DEFAULT_TIMEOUT_SECONDS = 120
-export const MAX_TIMEOUT_SECONDS = 600
+export const MAX_TIMEOUT_SECONDS = MAX_TOOL_TIMEOUT_SECONDS
 
 interface Args {
   command: string
@@ -19,7 +25,8 @@ const shell = resolveShell()
 const DESCRIPTION = `Run a shell command (${shell.name}) in the workspace directory. Use for builds, tests, git, and package managers.
 - Commands run in an OS sandbox by default: workspace writes are allowed, agent metadata is read-only, network is blocked, and credential environment variables are removed.
 - If the OS sandbox backend is unavailable, the result says so explicitly; user approval is still required.
-- Commands time out after ${DEFAULT_TIMEOUT_SECONDS} seconds unless you set timeout (max ${MAX_TIMEOUT_SECONDS}).
+- Without timeout, Boo chooses an adaptive idle limit by command category and local duration history, with a hard cap of ${MAX_TIMEOUT_SECONDS} seconds. Progress extends the idle deadline but never the hard cap.
+- Set timeout to request an exact hard limit (max ${MAX_TIMEOUT_SECONDS} seconds).
 - Standard input is closed by default: pass non-interactive flags (for example --yes) instead of expecting prompts.
 - For commands that never finish on their own — dev servers, watchers — set run_in_background. You get an id at once; check it with bash_output and stop it with bash_kill.
 - If a background command genuinely needs later stdin, also set interactive. Then use bash_input; each input requires fresh user approval. This is a pipe, not a full terminal/TTY.
@@ -46,7 +53,7 @@ export const bashTool: Tool<Args> = {
         properties: {
           command: { type: 'string', description: 'The shell command to run' },
           description: { type: 'string', description: 'Short description of what the command does' },
-          timeout: { type: 'number', description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SECONDS}, max ${MAX_TIMEOUT_SECONDS})` },
+          timeout: { type: 'number', description: `Exact hard timeout in seconds; omit for adaptive timeout (max ${MAX_TIMEOUT_SECONDS})` },
           run_in_background: { type: 'boolean', description: 'Start the command and return immediately with an id' },
           interactive: { type: 'boolean', description: 'Keep stdin open for bash_input; only valid with run_in_background' },
         },
@@ -68,15 +75,20 @@ export const bashTool: Tool<Args> = {
       return { content: `Berjalan di latar belakang dengan id ${id}. Periksa keluarannya dengan bash_output, hentikan dengan bash_kill.${input}${warning}` }
     }
 
-    const seconds = timeoutSeconds(args.timeout)
+    const timeout = selectAdaptiveTimeout(args.command, args.timeout, adaptiveTimeoutProfile(context.home))
     const result = await runCommand(args.command, {
       cwd: context.workspace,
       shell,
       sandbox,
-      timeoutMs: seconds * 1_000,
+      timeoutMs: timeout.idleSeconds * 1_000,
+      ...(timeout.mode === 'adaptive' ? { maxRuntimeMs: timeout.maximumSeconds * 1_000 } : {}),
       ...(context.signal ? { signal: context.signal } : {}),
       ...(context.onOutput ? { onOutput: context.onOutput } : {}),
     })
+    const updatedProfile = !result.cancelled && !result.spawnError
+      ? rememberAdaptiveTimeout(context.home, timeout.category, result.durationMs, result.timedOut)
+      : undefined
+    const nextTimeout = selectAdaptiveTimeout(args.command, undefined, updatedProfile ?? adaptiveTimeoutProfile(context.home))
     const warning = result.sandbox.enforced || sandbox.mode === 'danger-full-access' ? '' : `Peringatan sandbox: ${result.sandbox.reason}\n`
     const output = result.output
 
@@ -87,12 +99,35 @@ export const bashTool: Tool<Args> = {
       return { content: `${warning}Gagal menjalankan ${shell.file}: ${result.spawnError}`, isError: true }
     }
     if (result.timedOut) {
+      const explicit = timeout.mode === 'explicit'
+      const reason = result.timeoutReason === 'idle'
+        ? `tidak ada keluaran baru selama ${timeout.idleSeconds} detik`
+        : `mencapai batas total ${timeout.maximumSeconds} detik`
+      const headline = explicit
+        ? `Waktu habis: perintah dihentikan setelah ${timeout.maximumSeconds} detik.`
+        : `Waktu habis adaptif (${timeout.category}): ${reason}; proses dihentikan.`
+      const retryAdvice = timeout.category === 'long-running'
+        ? ' Command ini tampak seperti server/watcher; gunakan run_in_background dan periksa dengan bash_output.'
+        : explicit
+          ? ' Naikkan timeout bila command memang lama, atau gunakan run_in_background bila command tidak pernah selesai sendiri.'
+        : ` Percobaan adaptif berikutnya memakai idle hingga ${nextTimeout.idleSeconds} detik (maksimum ${nextTimeout.maximumSeconds} detik).`
+      const recovery = ' Recovery aman: keluaran parsial dipertahankan. Periksa filesystem/status proses sebelum mengulang karena command mungkin sudah menghasilkan side effect.'
       return {
         content: warning + withOutput(
-          `Waktu habis: perintah dihentikan setelah ${seconds} detik. Naikkan timeout bila memang lama, atau jalankan dengan run_in_background bila perintah ini tidak pernah selesai sendiri.`,
+          `${headline}${recovery}${retryAdvice}`,
           output,
         ),
         isError: true,
+        recovery: {
+          kind: 'timeout',
+          reason: result.timeoutReason ?? 'maximum',
+          category: timeout.category,
+          durationMs: result.durationMs,
+          idleTimeoutMs: timeout.idleSeconds * 1_000,
+          maximumTimeoutMs: timeout.maximumSeconds * 1_000,
+          nextIdleTimeoutMs: nextTimeout.idleSeconds * 1_000,
+          partialOutput: Boolean(output),
+        },
       }
     }
     if (result.exitCode !== 0) {

@@ -32,10 +32,11 @@ Tools:
   dependencies from a local incremental index. Use grep instead for exact text/regex.
 - For an unfamiliar repository or work spanning modules, use repo_map first to get
   a compact symbol outline. Use its query/path filters instead of loading many files.
-- After code changes, use test_impact when you need to identify affected tests and
-  detected test commands. Prefer diagnostics for project-configured type/lint checks;
-  use bash to run the smallest sufficient test set or when no supported diagnostics
-  are detected. test_impact analyzes only and does not run a command.
+- After code changes, use change_impact when you need the blast radius across
+  importers, callers, subclasses, and tests. Use test_impact for the smaller test
+  and command-focused view. Prefer diagnostics for project-configured type/lint
+  checks; use bash to run the smallest sufficient test set or when no supported
+  diagnostics are detected. Impact tools analyze only and never run a command.
 - When a language server is installed, use lsp for precise definitions, references,
   hover types, document symbols, or per-file diagnostics. Fall back to grep/read_file
   when LSP reports that its server is unavailable.

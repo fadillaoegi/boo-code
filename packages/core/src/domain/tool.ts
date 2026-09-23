@@ -83,6 +83,21 @@ export interface ToolContext {
 export interface ToolResult {
   content: string
   isError?: boolean
+  /** Metadata terstruktur agar UI/trace dapat membedakan timeout dari error biasa. */
+  recovery?: ToolRecovery
+  /** Statistik lifecycle LSP tanpa path, source, atau isi dokumen. */
+  lspSession?: { reused: boolean; restarted: boolean; openDocuments: number }
+}
+
+export interface ToolRecovery {
+  kind: 'timeout'
+  reason: 'idle' | 'maximum'
+  category: string
+  durationMs: number
+  idleTimeoutMs: number
+  maximumTimeoutMs: number
+  nextIdleTimeoutMs: number
+  partialOutput: boolean
 }
 
 export interface Tool<TArgs = Record<string, unknown>> {

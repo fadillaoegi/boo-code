@@ -66,7 +66,9 @@ export function verificationPrompt(files: readonly string[], attempts: readonly 
     : 'Belum ada pemeriksaan setelah perubahan terakhir.'
 
   const tests = impact ? [...impact.directTests, ...impact.dependentTests] : []
+  const affected = impact?.affectedFiles.filter((file) => !file.test).slice(0, 12) ?? []
   const suggestions = [
+    affected.length ? `Graph dampak ${impact!.blastRadius}: ${affected.map((file) => `${file.path} (depth ${file.depth})`).join(', ')}${impact!.affectedFiles.filter((file) => !file.test).length > affected.length ? ', …' : ''}.` : '',
     tests.length ? `Test terkait yang ditemukan: ${tests.join(', ')}.` : '',
     impact?.commands.length ? `Command test yang terdeteksi dari konfigurasi proyek: ${impact.commands.map((entry) => entry.command).join(' atau ')}.` : '',
   ].filter(Boolean).join('\n')

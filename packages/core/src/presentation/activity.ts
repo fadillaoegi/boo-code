@@ -26,6 +26,7 @@ const TOOL_LABEL: Record<string, ActivityLabel> = {
   tool_search: 'Searching',
   code_search: 'Searching',
   code_graph: 'Searching',
+  change_impact: 'Checking',
   test_impact: 'Checking',
   repo_map: 'Searching',
   web_search: 'Searching',
@@ -52,6 +53,23 @@ const TOOL_LABEL: Record<string, ActivityLabel> = {
   git_commit: 'Writing',
   list_apps: 'Searching',
   open_app: 'Running',
+  computer_status: 'Checking',
+  computer_snapshot: 'Reading',
+  computer_click: 'Running',
+  computer_type: 'Running',
+  computer_press: 'Running',
+  schedule_list: 'Reading',
+  schedule_add: 'Planning',
+  schedule_remove: 'Writing',
+  trigger_list: 'Reading',
+  trigger_add: 'Planning',
+  trigger_remove: 'Writing',
+  remote_node_list: 'Reading',
+  remote_node_status: 'Checking',
+  remote_node_snapshot: 'Reading',
+  remote_node_click: 'Running',
+  remote_node_type: 'Running',
+  remote_node_press: 'Running',
   browser_status: 'Checking',
   browser_tabs: 'Reading',
   browser_open: 'Running',
@@ -208,7 +226,7 @@ export function describeArgs(tool: string, args: Record<string, unknown>): strin
     return tool === 'grep' ? `"${args.pattern}"${where}` : `${args.pattern}${where}`
   }
   if (tool === 'code_search' && typeof args.query === 'string') return `"${args.query}"${typeof args.path === 'string' ? ` in ${args.path}` : ''}`
-  if (tool === 'test_impact' && Array.isArray(args.changed_files)) return `${args.changed_files.length} changed file${args.changed_files.length === 1 ? '' : 's'}`
+  if ((tool === 'change_impact' || tool === 'test_impact') && Array.isArray(args.changed_files)) return `${args.changed_files.length} changed file${args.changed_files.length === 1 ? '' : 's'}`
   if (tool === 'repo_map') {
     if (typeof args.query === 'string' && args.query) return `"${args.query}"${typeof args.path === 'string' ? ` in ${args.path}` : ''}`
     return typeof args.path === 'string' ? args.path : '.'

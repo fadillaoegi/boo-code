@@ -12,6 +12,7 @@
     "eval:validate": "node scripts/eval.ts evals/benchmark.json --validate",
     "eval:smoke": "node scripts/eval.ts evals/smoke.json",
     "eval:benchmark": "node scripts/eval.ts evals/benchmark.json",
+    "test:providers:live": "node scripts/provider-live.ts",
     "typecheck": "tsc -b",
     "release": "node scripts/release.ts"
   },
@@ -25,6 +26,9 @@
     "typescript-eslint": "^8.65.0"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "@microsoft/mxc-sdk": "0.8.0"
   }
 }

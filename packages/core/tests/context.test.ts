@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { contextRelevanceTerms, estimateMessageTokens, estimateToolSchemaTokens, inspectContext, messageContextBudget, trimToBudget } from '../src/agent/context.ts'
+import { buildContextDependencyGraph, contextRelevanceTerms, estimateMessageTokens, estimateToolSchemaTokens, inspectContext, messageContextBudget, trimToBudget } from '../src/agent/context.ts'
 import type { Message, ToolSchema } from '../src/domain/message.ts'
 
 const system: Message = { role: 'system', content: 'Kamu adalah Boo.' }
@@ -236,4 +236,64 @@ test('seluruh system prompt berurutan dipertahankan saat seleksi relevansi aktif
     'Kamu adalah Boo.', 'aturan proyek penting', 'pengingat verifikasi penting',
   ])
   assert.equal(result.messages.at(-1)?.content, 'perbaiki auth middleware')
+})
+
+test('dependency graph menghubungkan task, rantai tool, verifikasi, dan anchor lintas waktu', () => {
+  const messages: Message[] = [
+    system,
+    user('Perbaiki AuthService di src/auth/service.ts'),
+    assistantCall('read', 'src/auth/service.ts'),
+    toolResult('read', 'export class AuthService {}'),
+    {
+      role: 'assistant', content: null,
+      tool_calls: [{ id: 'patch', type: 'function', function: { name: 'apply_patch', arguments: '{"patch":"src/auth/service.ts"}' } }],
+    },
+    toolResult('patch', 'Done'),
+    {
+      role: 'assistant', content: null,
+      tool_calls: [{ id: 'test', type: 'function', function: { name: 'bash', arguments: '{"command":"pnpm test auth"}' } }],
+    },
+    toolResult('test', 'pass'),
+    { role: 'assistant', content: 'AuthService selesai.' },
+    user('Periksa lagi src/auth/service.ts'),
+  ]
+  const graph = buildContextDependencyGraph(messages)
+  assert.equal(graph.blocks, 6)
+  assert.ok(graph.edges.some((edge) => edge.kind === 'task'))
+  assert.ok(graph.edges.some((edge) => edge.kind === 'causal'))
+  assert.ok(graph.edges.some((edge) => edge.kind === 'verification'))
+  assert.ok(graph.edges.some((edge) => edge.kind === 'anchor' && edge.from === 5 && edge.to < 5))
+  assert.ok(graph.edges.every((edge) => edge.to < edge.from), 'dependency selalu mengarah ke bukti yang lebih lama')
+})
+
+test('dependency graph membatasi edge global dan fan-out setiap blok', () => {
+  const messages: Message[] = [system, user('Telusuri SharedCheckoutIdentifier')]
+  for (let index = 0; index < 700; index += 1) {
+    messages.push({ role: 'assistant', content: `SharedCheckoutIdentifier keputusan ${index}` })
+  }
+  const graph = buildContextDependencyGraph(messages)
+  assert.ok(graph.edges.length <= 512)
+  const outgoing = new Map<number, number>()
+  for (const edge of graph.edges) outgoing.set(edge.from, (outgoing.get(edge.from) ?? 0) + 1)
+  assert.ok([...outgoing.values()].every((count) => count <= 8))
+})
+
+test('pemangkasan mempertahankan closure dependency terbatas dari keputusan relevan', () => {
+  const noise = (index: number): Message => ({ role: 'assistant', content: `noise-${index} ${'netral '.repeat(90)}` })
+  const messages: Message[] = [
+    system,
+    user('Selidiki checkout lama'),
+    assistantCall('read-old', 'src/cart/checkout_parser.ts'),
+    toolResult('read-old', `parser memakai cache lama ${'bukti '.repeat(30)}`),
+    { role: 'assistant', content: 'CheckoutParser root cause sudah dikonfirmasi.' },
+    ...Array.from({ length: 8 }, (_, index) => noise(index)),
+    user('lanjut perbaiki CheckoutParser'),
+  ]
+  const result = trimToBudget(messages, 430, { focus: 'lanjut perbaiki CheckoutParser' })
+  assert.ok(result.droppedMessages > 0)
+  assert.ok(result.dependencyMessages >= 3, 'keputusan membawa task dan bukti tool yang menjadi dependency')
+  assert.ok(result.dependencyEdges >= 2)
+  assert.ok(result.messages.some((message) => message.tool_call_id === 'read-old'))
+  assert.equal(result.messages.at(-1)?.content, 'lanjut perbaiki CheckoutParser')
+  assert.ok(result.estimatedTokens <= 430)
 })

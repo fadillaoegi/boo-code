@@ -33,6 +33,10 @@ export interface TrimResult {
   droppedMessages: number
   /** Pesan lama relevan yang diselamatkan di luar ekor kronologis utuh. */
   prioritizedMessages: number
+  /** Pesan yang ikut dipertahankan karena menjadi dependency bukti terpilih. */
+  dependencyMessages: number
+  /** Edge dependency yang benar-benar dipakai saat memilih context. */
+  dependencyEdges: number
 }
 
 export interface TrimOptions {
@@ -66,6 +70,8 @@ export interface ContextReport {
   sentMessages: number
   droppedMessages: number
   prioritizedMessages: number
+  dependencyMessages: number
+  dependencyEdges: number
   historyMessages: number
   summarizedMessages: number
   compactionActive: boolean
@@ -146,6 +152,8 @@ export function inspectContext(
     sentMessages: trimmed.messages.length,
     droppedMessages: trimmed.droppedMessages,
     prioritizedMessages: trimmed.prioritizedMessages,
+    dependencyMessages: trimmed.dependencyMessages,
+    dependencyEdges: trimmed.dependencyEdges,
     historyMessages: metadata.historyMessages ?? Math.max(0, messages.length - 1),
     summarizedMessages: metadata.summarizedMessages ?? 0,
     compactionActive: (metadata.summarizedMessages ?? 0) > 0,
@@ -212,14 +220,97 @@ export function contextRelevanceTerms(focus: string): string[] {
   return [...terms]
 }
 
-function searchableBlock(block: readonly Message[]): string {
+function searchableBlock(block: readonly Message[], preserveCase = false): string {
   const parts: string[] = []
   for (const message of block) {
     if (message.content) parts.push(message.content.slice(0, 20_000))
     if (message.reasoning_content) parts.push(message.reasoning_content.slice(0, 4_000))
     for (const call of message.tool_calls ?? []) parts.push(call.function.name, call.function.arguments.slice(0, 8_000))
   }
-  return parts.join('\n').toLowerCase()
+  const text = parts.join('\n')
+  return preserveCase ? text : text.toLowerCase()
+}
+
+export type ContextDependencyKind = 'task' | 'causal' | 'anchor' | 'verification'
+
+export interface ContextDependencyEdge {
+  /** Blok yang memerlukan konteks lebih lama. */
+  from: number
+  /** Blok dependency yang lebih lama. */
+  to: number
+  kind: ContextDependencyKind
+}
+
+export interface ContextDependencyGraph {
+  blocks: number
+  edges: ContextDependencyEdge[]
+}
+
+const MAX_DEPENDENCY_ANCHORS = 32
+const MAX_DEPENDENCIES_PER_BLOCK = 8
+const MAX_CONTEXT_DEPENDENCY_EDGES = 512
+const MAX_DEPENDENCY_CLOSURE_BLOCKS = 12
+const MAX_DEPENDENCY_DEPTH = 3
+const MUTATION_TOOLS = new Set(['apply_patch', 'write_file', 'edit_file', 'memory_add', 'memory_remove', 'git_commit'])
+const VERIFICATION_TOOLS = new Set(['bash', 'diagnostics', 'lsp', 'test_impact', 'change_impact'])
+
+/** Anchor kuat saja; kata biasa tidak boleh menghubungkan seluruh percakapan. */
+function dependencyAnchors(block: readonly Message[]): string[] {
+  const source = searchableBlock(block, true)
+  const camelCaseSymbols = new Set(
+    (source.match(/\b[A-Za-z_$][A-Za-z0-9_$]*[A-Z][A-Za-z0-9_$]*\b/g) ?? []).map((term) => term.toLowerCase()),
+  )
+  const anchors = contextRelevanceTerms(source).filter((term) => {
+    if (term.includes('/') || term.includes('.') || term.includes('_') || term.includes('-')) return true
+    if (camelCaseSymbols.has(term)) return true
+    return term.length >= 8
+  })
+  return anchors.slice(0, MAX_DEPENDENCY_ANCHORS)
+}
+
+function blockTools(block: readonly Message[]): string[] {
+  return block.flatMap((message) => (message.tool_calls ?? []).map((call) => call.function.name))
+}
+
+function buildBlockDependencyGraph(blocks: readonly Message[][]): ContextDependencyGraph {
+  const edges: ContextDependencyEdge[] = []
+  const keys = new Set<string>()
+  const counts = new Map<number, number>()
+  const lastByAnchor = new Map<string, number>()
+  let lastUser = -1
+  let lastMutation = -1
+  const add = (from: number, to: number, kind: ContextDependencyKind) => {
+    if (from <= to || to < 0 || edges.length >= MAX_CONTEXT_DEPENDENCY_EDGES || (counts.get(from) ?? 0) >= MAX_DEPENDENCIES_PER_BLOCK) return
+    const key = `${from}:${to}:${kind}`
+    if (keys.has(key)) return
+    keys.add(key)
+    counts.set(from, (counts.get(from) ?? 0) + 1)
+    edges.push({ from, to, kind })
+  }
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index]
+    const isUser = block.some((message) => message.role === 'user')
+    const tools = blockTools(block)
+    if (!isUser && lastUser >= 0) add(index, lastUser, 'task')
+    if (!isUser && index > 0 && (tools.length || blockTools(blocks[index - 1]).length)) add(index, index - 1, 'causal')
+    if (tools.some((tool) => VERIFICATION_TOOLS.has(tool)) && lastMutation >= 0) add(index, lastMutation, 'verification')
+    for (const anchor of dependencyAnchors(block)) {
+      const previous = lastByAnchor.get(anchor)
+      if (previous !== undefined) add(index, previous, 'anchor')
+      lastByAnchor.set(anchor, index)
+    }
+    if (tools.some((tool) => MUTATION_TOOLS.has(tool))) lastMutation = index
+    if (isUser) lastUser = index
+  }
+  return { blocks: blocks.length, edges }
+}
+
+/** Graph ephemeral untuk inspeksi/test; index mengacu pada blok non-system. */
+export function buildContextDependencyGraph(messages: readonly Message[]): ContextDependencyGraph {
+  let systemCount = 0
+  while (messages[systemCount]?.role === 'system') systemCount += 1
+  return buildBlockDependencyGraph(toBlocks([...messages.slice(systemCount)]))
 }
 
 function relevanceScore(block: readonly Message[], terms: readonly string[], index: number, total: number): number {
@@ -243,7 +334,7 @@ function trimRelevant(system: Message[], blocks: Message[][], maxTokens: number,
   const budget = Math.max(0, maxTokens - systemTokens)
   const costs = blocks.map(blockTokens)
   const latest = blocks.length - 1
-  if (latest < 0) return { messages: system, estimatedTokens: systemTokens, droppedMessages: 0, prioritizedMessages: 0 }
+  if (latest < 0) return { messages: system, estimatedTokens: systemTokens, droppedMessages: 0, prioritizedMessages: 0, dependencyMessages: 0, dependencyEdges: 0 }
 
   // Bila blok terbaru sendiri tidak muat, struktur lebih penting daripada ranking.
   if (costs[latest] > budget) {
@@ -253,26 +344,70 @@ function trimRelevant(system: Message[], blocks: Message[][], maxTokens: number,
       estimatedTokens: systemTokens + blockTokens(shrunk),
       droppedMessages: blocks.flat().length - shrunk.length,
       prioritizedMessages: 0,
+      dependencyMessages: 0,
+      dependencyEdges: 0,
     }
   }
 
-  const selected = new Set<number>([latest])
-  let used = costs[latest]
+  const graph = buildBlockDependencyGraph(blocks)
+  const dependencies = new Map<number, ContextDependencyEdge[]>()
+  for (const edge of graph.edges) dependencies.set(edge.from, [...(dependencies.get(edge.from) ?? []), edge])
+  const selected = new Set<number>()
+  const dependencyOnly = new Set<number>()
+  const usedEdges = new Set<string>()
+  let used = 0
+  const closure = (root: number): { indices: number[]; edges: ContextDependencyEdge[] } => {
+    const indices = new Set<number>([root])
+    const includedEdges: ContextDependencyEdge[] = []
+    const queue = [{ index: root, depth: 0 }]
+    while (queue.length && indices.size < MAX_DEPENDENCY_CLOSURE_BLOCKS) {
+      const current = queue.shift()!
+      if (current.depth >= MAX_DEPENDENCY_DEPTH) continue
+      for (const edge of dependencies.get(current.index) ?? []) {
+        includedEdges.push(edge)
+        if (indices.has(edge.to)) continue
+        indices.add(edge.to)
+        queue.push({ index: edge.to, depth: current.depth + 1 })
+        if (indices.size >= MAX_DEPENDENCY_CLOSURE_BLOCKS) break
+      }
+    }
+    return { indices: [...indices], edges: includedEdges }
+  }
+  const select = (index: number): boolean => {
+    dependencyOnly.delete(index)
+    if (selected.has(index)) return true
+    const group = closure(index)
+    const additions = group.indices.filter((entry) => !selected.has(entry))
+    const cost = additions.reduce((total, entry) => total + costs[entry], 0)
+    if (used + cost <= budget) {
+      for (const entry of additions) {
+        selected.add(entry)
+        if (entry !== index) dependencyOnly.add(entry)
+        used += costs[entry]
+      }
+      for (const edge of group.edges) {
+        if (selected.has(edge.from) && selected.has(edge.to)) usedEdges.add(`${edge.from}:${edge.to}:${edge.kind}`)
+      }
+      return true
+    }
+    if (used + costs[index] > budget) return false
+    selected.add(index)
+    used += costs[index]
+    return true
+  }
+
+  select(latest)
   const latestUser = blocks.findLastIndex((block) => block.some((message) => message.role === 'user'))
   const preferred = [latestUser, latest - 1, latest - 2].filter((index, position, all) => index >= 0 && all.indexOf(index) === position)
   for (const index of preferred) {
-    if (selected.has(index) || used + costs[index] > budget) continue
-    selected.add(index)
-    used += costs[index]
+    select(index)
   }
 
   const ranked = blocks.map((block, index) => ({ index, score: relevanceScore(block, terms, index, blocks.length) }))
     .filter(({ index }) => !selected.has(index))
     .sort((left, right) => right.score - left.score || right.index - left.index)
   for (const { index } of ranked) {
-    if (used + costs[index] > budget) continue
-    selected.add(index)
-    used += costs[index]
+    select(index)
   }
 
   const ordered = [...selected].sort((left, right) => left - right)
@@ -285,6 +420,8 @@ function trimRelevant(system: Message[], blocks: Message[][], maxTokens: number,
     estimatedTokens: systemTokens + used,
     droppedMessages: blocks.flat().length - kept.length,
     prioritizedMessages,
+    dependencyMessages: [...dependencyOnly].reduce((sum, index) => sum + blocks[index].length, 0),
+    dependencyEdges: usedEdges.size,
   }
 }
 
@@ -320,7 +457,7 @@ export function trimToBudget(
   maxTokens = DEFAULT_MAX_CONTEXT_TOKENS,
   options: TrimOptions = {},
 ): TrimResult {
-  if (!messages.length) return { messages: [], estimatedTokens: 0, droppedMessages: 0, prioritizedMessages: 0 }
+  if (!messages.length) return { messages: [], estimatedTokens: 0, droppedMessages: 0, prioritizedMessages: 0, dependencyMessages: 0, dependencyEdges: 0 }
 
   let systemCount = 0
   while (messages[systemCount]?.role === 'system') systemCount += 1
@@ -333,7 +470,7 @@ export function trimToBudget(
   const terms = contextRelevanceTerms(options.focus ?? '')
   const totalTokens = blocks.reduce((total, block) => total + blockTokens(block), systemTokens)
   if (totalTokens <= maxTokens) {
-    return { messages: [...messages], estimatedTokens: totalTokens, droppedMessages: 0, prioritizedMessages: 0 }
+    return { messages: [...messages], estimatedTokens: totalTokens, droppedMessages: 0, prioritizedMessages: 0, dependencyMessages: 0, dependencyEdges: 0 }
   }
   if (terms.length) return trimRelevant(system, blocks, maxTokens, terms)
 
@@ -356,6 +493,8 @@ export function trimToBudget(
       estimatedTokens: systemTokens + blockTokens(shrunk),
       droppedMessages: dropped,
       prioritizedMessages: 0,
+      dependencyMessages: 0,
+      dependencyEdges: 0,
     }
   }
 
@@ -365,5 +504,7 @@ export function trimToBudget(
     estimatedTokens: systemTokens + used,
     droppedMessages: rest.length - kept.length,
     prioritizedMessages: 0,
+    dependencyMessages: 0,
+    dependencyEdges: 0,
   }
 }

@@ -56,6 +56,9 @@ test('laporan benchmark digabung per model, difficulty, dan tag', () => {
       metrics: {
         turns: 2, toolCalls: 2, toolFailures: 1, retries: 1, tools: {}, model: 'model-a',
         reasoningEffort: 'high', difficulty: 'standard', verificationRequested: true, verificationIncomplete: false,
+        verificationRepairRounds: 0, verificationRepairs: 0, verificationRepairExhausted: 0,
+        changeImpactAnalyses: 0, changeImpactAffectedFiles: 0, changeImpactEdges: 0, changeImpactLarge: 0,
+        lspSessionStarts: 0, lspSessionReuses: 0, lspSessionRestarts: 0,
       },
     }],
   })

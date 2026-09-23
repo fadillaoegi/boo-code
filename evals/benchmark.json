@@ -1,8 +1,13 @@
 {
   "schemaVersion": 1,
   "name": "Boo agent regression benchmark",
-  "description": "Kasus coding, debugging, instruksi proyek, penelusuran, dan perubahan multi-file untuk mendeteksi regresi perilaku agent.",
+  "description": "Benchmark perilaku agent untuk debugging, refactor lintas modul, keamanan, concurrency, change-impact analysis, navigasi repository, instruksi proyek, dan preservasi API.",
   "model": "auto",
+  "coverage": {
+    "minCases": 12,
+    "requiredTags": ["debugging", "implementation", "refactor", "security", "concurrency", "multi-file", "large-repo", "investigation", "impact-analysis", "instructions", "regression"],
+    "requiredDifficulties": ["simple", "standard", "complex", "expert"]
+  },
   "cases": [
     {
       "id": "fix-add",
@@ -17,6 +22,8 @@
           { "path": "app.test.js", "sha256": "90def2748f49692a604e6b3ef99bb471bbfac4629df6c5dc281b795a1fc04247" }
         ],
         "requiredTools": ["bash"],
+        "requiredChangedFiles": ["app.js"],
+        "allowedChangedFiles": ["app.js"],
         "requireVerification": true,
         "maxTurns": 8,
         "maxToolCalls": 10
@@ -35,6 +42,8 @@
           { "path": "price.test.js", "sha256": "c7091fa0b960afb54dfe39cc3eb0c1da68647e6b1c9d39d890ae90ebd72035d3" }
         ],
         "requiredTools": ["bash"],
+        "requiredChangedFiles": ["price.js"],
+        "allowedChangedFiles": ["price.js"],
         "requireVerification": true,
         "maxTurns": 8,
         "maxToolCalls": 12
@@ -53,6 +62,8 @@
           { "path": "slug.test.js", "sha256": "526d58ff4634908dc605cddf7e83355e6cc11ff002c90781cefbf47c1b7e38e1" }
         ],
         "requiredTools": ["bash"],
+        "requiredChangedFiles": ["slug.js"],
+        "allowedChangedFiles": ["slug.js"],
         "requireVerification": true,
         "maxTurns": 10,
         "maxToolCalls": 14
@@ -72,6 +83,8 @@
           { "path": "cart.test.js", "sha256": "449935929a691ed861cee98111cb5f8bf4abef5635c373c133410dd066eb801c" }
         ],
         "requiredTools": ["bash"],
+        "requiredChangedFiles": ["src/cart.js"],
+        "allowedChangedFiles": ["src/cart.js"],
         "requireVerification": true,
         "maxTurns": 10,
         "maxToolCalls": 14
@@ -90,6 +103,8 @@
           { "path": "format.test.js", "sha256": "288805230a336003435c11df0c66a4a6ba3cc6d9cc0616642be2710d3bb29284" }
         ],
         "requiredTools": ["bash"],
+        "requiredChangedFiles": ["src/format.js"],
+        "allowedChangedFiles": ["src/format.js"],
         "requireVerification": true,
         "maxTurns": 8,
         "maxToolCalls": 12
@@ -104,6 +119,8 @@
       "expect": {
         "requiredTools": ["read_file"],
         "forbiddenTools": ["write_file", "edit_file", "apply_patch", "bash"],
+        "allowedChangedFiles": [],
+        "maxChangedFiles": 0,
         "answerContains": "4312",
         "maxTurns": 5,
         "maxToolCalls": 5
@@ -122,9 +139,109 @@
           { "path": "parser.test.js", "sha256": "4632df41a1a892f4dc1d3d5e3f7f450d1650b12a547c3b5446156acc94e07fc4" }
         ],
         "requiredTools": ["bash"],
+        "requiredChangedFiles": ["parser.js"],
+        "allowedChangedFiles": ["parser.js"],
         "requireVerification": true,
         "maxTurns": 8,
         "maxToolCalls": 12
+      }
+    },
+    {
+      "id": "secure-upload-path",
+      "prompt": "Perbaiki validasi path upload agar traversal dan sibling directory dengan prefix serupa ditolak secara lintas platform. Pertahankan API dan pesan error, jangan ubah test, lalu jalankan `node --test`.",
+      "fixture": "fixtures/security-path",
+      "tags": ["debugging", "security", "path", "javascript"],
+      "difficulty": "expert",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "storage.js", "contains": "path.relative", "notContains": "resolved.startsWith(root)" },
+          { "path": "storage.test.js", "sha256": "def37099a8c3842982a22017af2f9b1d53fece0ab4547baa71b313d0a309be70" }
+        ],
+        "requiredTools": ["bash"],
+        "requiredChangedFiles": ["storage.js"],
+        "allowedChangedFiles": ["storage.js"],
+        "requireVerification": true,
+        "maxTurns": 12,
+        "maxToolCalls": 18
+      }
+    },
+    {
+      "id": "dedupe-concurrent-cache",
+      "prompt": "Perbaiki race condition cache: pemanggilan loader konkuren untuk key yang sama harus dideduplikasi, tetapi kegagalan sementara tidak boleh tersimpan permanen. Jangan ubah test dan jalankan `node --test`.",
+      "fixture": "fixtures/concurrent-cache",
+      "tags": ["debugging", "concurrency", "async", "javascript"],
+      "difficulty": "complex",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "cache.js", "notContains": "const value = await loader()" },
+          { "path": "cache.test.js", "sha256": "5b28af27e37d05f6c58be8bc68aa88b3fd7fa175ae5c6be3cfe04fdf0c41bcad" }
+        ],
+        "requiredTools": ["bash"],
+        "requiredChangedFiles": ["cache.js"],
+        "allowedChangedFiles": ["cache.js"],
+        "requireVerification": true,
+        "maxTurns": 12,
+        "maxToolCalls": 18
+      }
+    },
+    {
+      "id": "refactor-shared-normalizer",
+      "prompt": "Refactor duplikasi normalisasi di formatter menjadi fungsi `normalizeWords` pada modul baru `src/normalize.js`. Pertahankan seluruh public API dan perilaku, jangan ubah index atau test, lalu jalankan `node --test`.",
+      "fixture": "fixtures/refactor-normalizer",
+      "tags": ["refactor", "multi-file", "api", "javascript"],
+      "difficulty": "complex",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "src/normalize.js", "contains": "normalizeWords" },
+          { "path": "src/formatter.js", "contains": "./normalize.js" },
+          { "path": "src/index.js", "sha256": "251dfa0019f4b593bcc2809f0c2725bfd929e3f4491ccd3daf31df2732c2bb33" },
+          { "path": "formatter.test.js", "sha256": "b8ae7693a50c32fdfb4d226acbcac94d2ea06f4c7d938fe3cec592c8a7c08454" }
+        ],
+        "requiredTools": ["bash"],
+        "requiredChangedFiles": ["src/formatter.js", "src/normalize.js"],
+        "allowedChangedFiles": ["src/formatter.js", "src/normalize.js"],
+        "requireVerification": true,
+        "maxTurns": 12,
+        "maxToolCalls": 18
+      }
+    },
+    {
+      "id": "least-privilege-large-repo",
+      "prompt": "User tanpa role saat ini memperoleh izin delete. Telusuri repository, perbaiki akar masalah dengan perubahan sekecil mungkin, pertahankan perilaku role yang dikenal, jangan ubah test, lalu jalankan `node --test`.",
+      "fixture": "fixtures/large-repo-role",
+      "tags": ["debugging", "security", "large-repo", "context", "javascript"],
+      "difficulty": "expert",
+      "allowedCommands": ["node --test"],
+      "expect": {
+        "files": [
+          { "path": "src/users/roles.js", "contains": "viewer", "notContains": "role || 'admin'" },
+          { "path": "authorize.test.js", "sha256": "46b508ed732eb094c3fa8d48284c33e9b926c18b2be21aa81793c268149f35ef" }
+        ],
+        "requiredTools": ["bash"],
+        "requiredChangedFiles": ["src/users/roles.js"],
+        "allowedChangedFiles": ["src/users/roles.js"],
+        "requireVerification": true,
+        "maxTurns": 12,
+        "maxToolCalls": 20
+      }
+    },
+    {
+      "id": "map-role-change-impact",
+      "prompt": "Tanpa mengubah file, gunakan change impact graph untuk memetakan dampak jika src/users/roles.js diubah. Jelaskan konsumen langsung dan test transitif yang perlu diperiksa.",
+      "fixture": "fixtures/large-repo-role",
+      "tags": ["investigation", "impact-analysis", "large-repo", "read-only", "javascript"],
+      "difficulty": "complex",
+      "expect": {
+        "requiredTools": ["change_impact"],
+        "forbiddenTools": ["write_file", "edit_file", "apply_patch", "bash"],
+        "allowedChangedFiles": [],
+        "maxChangedFiles": 0,
+        "answerContains": "authorize.test.js",
+        "maxTurns": 6,
+        "maxToolCalls": 6
       }
     }
   ]

@@ -10,9 +10,9 @@ export const MAX_PROMPT_COMMAND_BYTES = 64 * 1024
 export const PROMPT_COMMAND_MARK = '[Boo custom command]'
 
 const RESERVED = new Set([
-  'apps', 'attach', 'attachments', 'compact', 'commands', 'exit', 'help', 'implement', 'init', 'keluar',
+  'apps', 'attach', 'attachments', 'capabilities', 'compact', 'commands', 'exit', 'help', 'implement', 'init', 'keluar',
   'hooks', 'model', 'open', 'plan', 'queue', 'resume', 'review', 'run', 'spec', 'stats', 'undo',
-  'status',
+  'postmortem', 'status',
 ])
 
 export interface PromptCommand {

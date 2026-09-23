@@ -28,6 +28,13 @@ Git, ripgrep, sandbox, dan browser CDP opsional. Credential, source, prompt, coo
 dan isi halaman tidak dicetak. Exit code `1` hanya dipakai untuk kegagalan wajib;
 integrasi opsional yang tidak aktif dilaporkan sebagai peringatan.
 
+Command lokal dijaga Seatbelt pada macOS, Bubblewrap pada Linux, dan Microsoft MXC
+ProcessContainer pada Windows x64/ARM64. Backend Windows memakai AppContainer atau
+BaseContainer native, memblokir filesystem/network secara default, membersihkan ACL
+sesudah proses, dan menolak status enforced bila `wxc-exec --probe` gagal. Jika
+backend OS tidak tersedia, Boo kembali meminta approval dan menjelaskan fallback;
+ia tidak mengganti sandbox dengan pembatasan PowerShell.
+
 ## Memakai
 
 ```bash
@@ -50,6 +57,40 @@ Mode `exec` menolak tool yang membutuhkan approval secara bawaan. `--full-auto`
 hanya mengizinkan perubahan workspace dan command lokal yang benar-benar dijaga
 OS sandbox; aplikasi, pesan, memori global, dan MCP tetap ditolak. `--json`
 menghasilkan JSONL dan record terakhir selalu bertipe `result`.
+
+Task berkala memakai penyimpanan JSON lokal tanpa database:
+
+```bash
+boo-code schedule add --every 30m -- "periksa status proyek"
+boo-code schedule add --daily 09:00 --full-auto -- "jalankan lint dan perbaiki"
+boo-code daemon
+```
+
+`--full-auto` scheduler memiliki batas yang sama dengan mode headless: hanya file
+workspace dan command lokal tersandbox; computer use, pesan, MCP, dan aksi eksternal
+tetap ditolak.
+
+Task juga dapat dipicu event tanpa database:
+
+```bash
+boo-code trigger add file --pattern "src/**/*.ts" --debounce 2s -- "jalankan test terkait"
+boo-code trigger add git -- "review commit baru"
+boo-code trigger add custom --event ci.failed -- "diagnosis build"
+boo-code trigger emit ci.failed
+boo-code trigger add webhook -- "proses notifikasi deployment"
+boo-code daemon
+```
+
+Webhook hanya membuka loopback `127.0.0.1:7331`, memakai Bearer token yang
+ditampilkan satu kali, dan tidak meneruskan request body ke model. File/Git memakai
+polling portabel dengan debounce dan pengamatan pertama hanya membuat baseline.
+Definisi, antrean, dan ringkasan run disimpan sebagai file privat di `~/.boo`.
+
+Computer use native memakai bridge accessibility yang didaftarkan di
+`~/.boo/computer.json` untuk `darwin`, `win32`, atau `linux`. Snapshot, klik, input,
+dan tombol selalu membutuhkan approval baru. Device lain dapat dipasangkan lewat
+`boo-code node pair` dan dilayani lewat `boo-code node serve`; HTTP hanya loopback,
+alamat jaringan wajib HTTPS, dan protokol remote tidak menyediakan shell bebas.
 
 Dalam sesi interaktif gunakan `/attach <path>` sebelum mengetik prompt. PNG, JPEG,
 WebP, dan GIF didukung hingga lima gambar per pesan. Gambar disimpan privat agar
@@ -194,6 +235,23 @@ Mode Auto memilih model dan tingkat penalaran per tugas. Jika profil benchmark l
 `~/.boo/auto-performance.json` tersedia dan memiliki sedikitnya tiga sampel untuk
 dua model pada difficulty yang sama, hasil terukur ikut menentukan pilihan; data
 lama/rusak selalu diabaikan dan kebijakan bawaan tetap menjadi fallback.
+Auto juga mempelajari dukungan model dari respons dan error provider nyata di
+`~/.boo/provider-capabilities.json`: availability, tool calling, gambar, reasoning,
+dan kapasitas konteks. Hanya counter serta angka token yang disimpan, tanpa prompt,
+source, path, argumen, jawaban, atau output. Jalankan `/capabilities` untuk melihat
+bukti lokal yang sedang aktif.
+
+Task yang berakhir gagal, berhenti, atau belum terverifikasi menghasilkan failure
+postmortem lokal di `~/.boo/postmortems/<hash-workspace>/`. Diagnosis memakai event
+nyata tanpa panggilan model tambahan dan tidak menyimpan prompt, pesan error mentah,
+source, path, argumen, jawaban, atau output. Gunakan `/postmortem` untuk melihat
+penyebab terakhir beserta tindakan lanjut yang disarankan.
+
+Saat context window mulai penuh, Boo memilih history relevan bersama dependency
+penjelasnya: task user, rantai tool, perubahan yang sedang diverifikasi, serta
+path/simbol yang muncul kembali. Graph ini dibatasi, hanya hidup di memori, dan
+tidak memakai DB. `/context` memperkirakan pesan/relasi yang dipertahankan;
+`/status` dan `/stats` menampilkan angka agregat sesudah trimming terjadi.
 
 Setelah perubahan kode berat lolos verifikasi, Boo menjalankan reviewer independen
 tanpa tool terhadap diff checkpoint terbaru. Temuan diperiksa kembali oleh agent

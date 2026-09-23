@@ -6,7 +6,7 @@
  * berasal dari kejadian nyata.
  */
 
-import { DIFFICULTY_LABEL, describeSelection, groupModels, type AgentEvent } from '@boo/core'
+import { DIFFICULTY_LABEL, describeSelection, formatFailurePostmortem, groupModels, type AgentEvent } from '@boo/core'
 import { describeArgs, lastOutputLine, ToolCallProgress, toolActivity, turnActivity } from '@boo/core/presentation/activity.ts'
 import { PhaseTally, phaseOf, type Phase } from '@boo/core/presentation/phases.ts'
 import { parseTodos, todoProgress } from '@boo/core'
@@ -134,6 +134,10 @@ export class RequestPresenter {
         if (event.stage === 'started') this.show('Exploring', `${event.calls} tool paralel · ${event.tools.join(', ')}`)
         break
 
+      case 'tool-recovery':
+        this.show('Recovering', `${event.category} timeout · batas berikutnya ${Math.ceil(event.nextIdleTimeoutMs / 1_000)}s`)
+        break
+
       case 'tool-end': {
         this.outputs.delete(event.callId)
         if (event.cancelled || ((event.name === 'todo_write' || event.name === 'ask_user') && !event.isError)) break
@@ -147,6 +151,20 @@ export class RequestPresenter {
         }
         break
       }
+
+      case 'verification-repair':
+        if (event.stage === 'repaired') this.notice('info', `Verification repair berhasil dalam ${event.round} putaran.`)
+        else if (event.stage === 'exhausted') this.notice('error', `Verification repair berhenti aman setelah ${event.round}/${event.maxRounds} putaran.`)
+        else this.show('Repairing', `verifikasi · putaran ${event.round}/${event.maxRounds}`)
+        break
+
+      case 'change-impact':
+        this.show('Checking', `${event.affectedFiles} file terdampak · ${event.edges} relasi · blast radius ${event.blastRadius}${event.truncated ? ' · dibatasi' : ''}`)
+        break
+
+      case 'lsp-session':
+        this.show(event.stage === 'reused' ? 'Checking' : 'Starting', `LSP ${event.stage} · ${event.openDocuments} dokumen aktif`)
+        break
 
       case 'tool-invalid':
         this.commitPhase()
@@ -213,7 +231,7 @@ export class RequestPresenter {
         break
 
       case 'context-trimmed':
-        this.notice('info', `Konteks dipangkas: ${event.droppedMessages} pesan dibuang, ${event.prioritizedMessages} pesan relevan lama dipertahankan (~${event.estimatedTokens} token terkirim)`)
+        this.notice('info', `Konteks dipangkas: ${event.droppedMessages} pesan dibuang, ${event.prioritizedMessages} pesan relevan lama dipertahankan${event.dependencyMessages ? `, ${event.dependencyMessages} pesan dependency melalui ${event.dependencyEdges ?? 0} relasi` : ''} (~${event.estimatedTokens} token terkirim)`)
         break
 
       case 'workspace-changed': {
@@ -281,6 +299,11 @@ export class RequestPresenter {
 
       case 'risk-verification-weak':
         this.notice('error', 'Perubahan berisiko tinggi hanya memiliki bukti verifikasi dasar; reviewer otomatis tetap dijalankan.')
+        break
+
+      case 'failure-postmortem':
+        this.commitPhase()
+        this.notice('error', formatFailurePostmortem(event.report))
         break
 
       case 'error':

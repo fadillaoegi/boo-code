@@ -100,6 +100,51 @@ export function describeRequest(tool: string, args: Record<string, unknown>, fil
       const app = typeof args.id === 'string' ? args.id : 'aplikasi ini'
       return { kind: 'other', title: 'Buka aplikasi', subject: app, question: `Buka aplikasi ${app}?`, allowAlways: `Ya, jangan tanya lagi untuk aplikasi ${app} di sesi ini` }
     }
+    case 'computer_snapshot':
+      return { kind: 'other', title: 'Baca UI aplikasi', subject: 'aplikasi native aktif', question: 'Izinkan Boo membaca accessibility tree terbatas dari aplikasi aktif? Teks terlihat pada UI dapat bersifat privat.', allowAlways: 'Tidak tersedia: setiap snapshot UI harus dikonfirmasi.' }
+    case 'computer_click': {
+      const ref = typeof args.ref === 'string' ? args.ref : 'elemen'
+      return { kind: 'other', title: 'Klik UI aplikasi', subject: ref, question: `Aktifkan elemen native ${ref}? Tindakan ini dapat menjalankan aksi dalam aplikasi.`, allowAlways: 'Tidak tersedia: setiap klik UI harus dikonfirmasi.' }
+    }
+    case 'computer_type': {
+      const ref = typeof args.ref === 'string' ? args.ref : 'elemen'
+      const text = typeof args.text === 'string' ? args.text : ''
+      return { kind: 'other', title: 'Ketik di aplikasi', subject: ref, question: `Ketik teks berikut ke elemen native ${ref}?\n\n${text}`, allowAlways: 'Tidak tersedia: setiap input UI harus dikonfirmasi.' }
+    }
+    case 'computer_press': {
+      const ref = typeof args.ref === 'string' ? args.ref : 'elemen'
+      const key = typeof args.key === 'string' ? args.key : 'tombol'
+      return { kind: 'other', title: 'Tekan tombol di aplikasi', subject: ref, question: `Tekan ${key} pada elemen native ${ref}?`, allowAlways: 'Tidak tersedia: setiap tombol UI harus dikonfirmasi.' }
+    }
+    case 'schedule_add': {
+      const prompt = typeof args.prompt === 'string' ? args.prompt : ''
+      const timing = typeof args.every_minutes === 'number' ? `setiap ${args.every_minutes} menit` : `setiap hari ${String(args.daily_at ?? '')}`
+      return { kind: 'other', title: 'Jadwalkan task Boo', subject: timing, question: `Simpan task terjadwal berikut?\n\n${prompt}\n\nMode: ${args.full_auto === true ? 'workspace full-auto (aksi eksternal tetap ditolak)' : 'tanpa persetujuan otomatis'}`, allowAlways: 'Tidak tersedia: setiap task terjadwal harus dikonfirmasi.' }
+    }
+    case 'schedule_remove': {
+      const id = typeof args.id === 'string' ? args.id : ''
+      return { kind: 'other', title: 'Hapus task terjadwal', subject: id, question: `Hapus task terjadwal ${id}?`, allowAlways: 'Tidak tersedia: setiap penghapusan jadwal harus dikonfirmasi.' }
+    }
+    case 'trigger_add': {
+      const prompt = typeof args.prompt === 'string' ? args.prompt : ''
+      const source = typeof args.source === 'string' ? args.source : 'event'
+      const detail = source === 'file' ? String(args.pattern ?? '') : source === 'custom' ? String(args.event ?? '') : 'HEAD'
+      return { kind: 'other', title: 'Buat event trigger Boo', subject: `${source}: ${detail}`, question: `Simpan event trigger berikut?\n\n${prompt}\n\nMode: ${args.full_auto === true ? 'workspace full-auto (aksi eksternal tetap ditolak)' : 'tanpa persetujuan otomatis'}`, allowAlways: 'Tidak tersedia: setiap event trigger harus dikonfirmasi.' }
+    }
+    case 'trigger_remove': {
+      const id = typeof args.id === 'string' ? args.id : ''
+      return { kind: 'other', title: 'Hapus event trigger', subject: id, question: `Hapus event trigger ${id}?`, allowAlways: 'Tidak tersedia: setiap penghapusan trigger harus dikonfirmasi.' }
+    }
+    case 'remote_node_status':
+    case 'remote_node_snapshot':
+    case 'remote_node_click':
+    case 'remote_node_type':
+    case 'remote_node_press': {
+      const node = typeof args.node === 'string' ? args.node : 'node'
+      const action = tool.replace('remote_node_', '')
+      const detail = tool === 'remote_node_type' && typeof args.text === 'string' ? `\n\nTeks:\n${args.text}` : ''
+      return { kind: 'other', title: 'Akses remote device', subject: node, question: `Izinkan aksi ${action} pada remote node ${node}?${detail}`, allowAlways: 'Tidak tersedia: setiap aksi remote node harus dikonfirmasi.' }
+    }
     case 'browser_tabs':
       return { kind: 'other', title: 'Lihat tab browser', subject: 'Chrome/Edge lokal', question: 'Izinkan Boo melihat judul dan URL tab browser lokal? Nilai query URL akan disembunyikan.', allowAlways: 'Tidak tersedia: metadata browser selalu memerlukan persetujuan baru.' }
     case 'browser_open': {
